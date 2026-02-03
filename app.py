@@ -23,11 +23,6 @@ st.set_page_config(
 def get_google_sheets_client():
     """Googleスプレッドシートクライアントを取得"""
     try:
-        # 認証情報のパス（ユーザーのDesktopにあるJSONファイル）
-        creds_path = str(Path("/tmp")/google_credentials.json")
-        
-        if not os.path.exists(creds_path):
-            st.error(f"認証ファイルが見つかりません: {creds_path}")
             return None
         
         scope = [
