@@ -103,7 +103,7 @@ def get_metadata(account_name):
 
 def transcribe_video(video_url, output_dir):
     """動画を文字起こし（TikTok用）"""
-    script_path = str(Path("/tmp")/instagram_to_text.sh")
+    script_path = str(Path(__file__).parent / "instagram_transcriber.py")
     result = subprocess.run(
         [script_path, video_url],
         capture_output=True,
@@ -183,7 +183,7 @@ with tab1:
         with st.spinner("メタデータ取得中..."):
             if get_metadata(account_name):
                 # CSVファイルを読み込み
-                csv_file = str(Path("/tmp")/tiktok_{account_name}_metadata.csv")
+                csv_file = str(Path("/tmp") / f"tiktok_{account_name}_metadata.csv")
                 
                 if os.path.exists(csv_file):
                     df = pd.read_csv(csv_file)
@@ -266,7 +266,7 @@ with tab1:
                 df = st.session_state['tiktok_df']
                 selected_indices = st.session_state['tiktok_selected_indices']
                 account_name = st.session_state['tiktok_account_name']
-                output_dir = str(Path("/tmp")/instagram_transcripts")
+                output_dir = str(Path("/tmp") / "instagram_transcripts")
                 
                 # Googleスプレッドシートクライアント取得
                 client = get_google_sheets_client()
@@ -493,7 +493,7 @@ with tab2:
             if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="instagram_transcribe"):
                 urls = st.session_state['instagram_url_list']
                 account_name = st.session_state['instagram_account_name']
-                output_dir = str(Path("/tmp")/instagram_transcripts")
+                output_dir = str(Path("/tmp") / "instagram_transcripts")
                 
                 # Googleスプレッドシートクライアント取得
                 client = get_google_sheets_client()
