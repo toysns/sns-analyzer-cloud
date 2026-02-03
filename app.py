@@ -93,7 +93,7 @@ def save_to_google_sheets(client, account_name, videos_data, platform="tiktok"):
 # TikTok用関数
 def get_metadata(account_name):
     """TikTokアカウントのメタデータを取得"""
-    script_path = str(Path("/tmp")/tiktok_metadata.py")
+    script_path = str(Path(__file__).parent / "tiktok_metadata.py")
     result = subprocess.run(
         ['python3', script_path, account_name],
         capture_output=True,
