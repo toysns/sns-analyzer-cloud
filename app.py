@@ -20,6 +20,8 @@ st.set_page_config(
 
 # Googleスプレッドシート認証
 @st.cache_resource
+def get_google_sheets_client():
+    """Googleスプレッドシートクライアントを取得"""
     try:
         # Streamlit Secretsから認証情報を取得
         if 'google_credentials' in st.secrets:
@@ -38,11 +40,9 @@ st.set_page_config(
         client = gspread.authorize(creds)
         
         return client
-        client = gspread.authorize(creds)
-        
-        return client
     except Exception as e:
         st.error(f"Google認証エラー: {str(e)}")
+        return None
         return None
 
 def save_to_google_sheets(client, account_name, videos_data, platform="tiktok"):
