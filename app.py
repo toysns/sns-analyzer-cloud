@@ -20,9 +20,13 @@ st.set_page_config(
 
 # Googleスプレッドシート認証
 @st.cache_resource
-def get_google_sheets_client():
-    """Googleスプレッドシートクライアントを取得"""
     try:
+        # Streamlit Secretsから認証情報を取得
+        if 'google_credentials' in st.secrets:
+            creds_dict = dict(st.secrets['google_credentials'])
+        else:
+            st.error("❌ Google認証情報が設定されていません")
+            st.info("💡 Streamlit Secretsに`google_credentials`を設定してください")
             return None
         
         scope = [
@@ -30,7 +34,10 @@ def get_google_sheets_client():
             'https://www.googleapis.com/auth/drive'
         ]
         
-        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        
+        return client
         client = gspread.authorize(creds)
         
         return client
