@@ -106,7 +106,7 @@ def transcribe_video(video_url, output_dir):
     """動画を文字起こし（TikTok用）"""
     script_path = str(Path(__file__).parent / "instagram_transcriber.py")
     result = subprocess.run(
-        [script_path, video_url],
+        ['python3', script_path, video_url],
         capture_output=True,
         text=True,
         cwd=output_dir
