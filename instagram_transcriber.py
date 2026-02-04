@@ -74,8 +74,12 @@ def transcribe_audio(audio_path, output_dir):
     """音声を文字起こし"""
     try:
         # Whisperで文字起こし
+        whisper_path = shutil.which('whisper')
+        if not whisper_path:
+            raise Exception("whisperコマンドが見つかりません")
+        
         result = subprocess.run([
-            sys.executable, '-m', 'whisper',
+            whisper_path,
             str(audio_path),
             '--language', 'ja',
             '--model', 'base',
