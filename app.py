@@ -333,6 +333,10 @@ with tab1:
                     # 文字起こし実行
                     transcript, error = transcribe_video(video_url, output_dir)
                     
+                    # デバッグ用：エラーを表示
+                    if error:
+                        st.error(f"❌ 動画 {idx+1}: {error}")
+                    
                     if transcript:
                         results.append({
                             '順位': f"{idx+1}位",
