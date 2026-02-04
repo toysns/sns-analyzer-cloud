@@ -109,10 +109,9 @@ def transcribe_video(video_url, output_dir):
     
     script_path = str(Path(__file__).parent / "instagram_transcriber.py")
     result = subprocess.run(
-        ['python3', script_path, video_url],
+        ['python3', script_path, video_url, output_dir],
         capture_output=True,
-        text=True,
-        cwd=output_dir
+        text=True
     )
     
     if result.returncode == 0:
@@ -123,7 +122,9 @@ def transcribe_video(video_url, output_dir):
             with open(latest_file, 'r', encoding='utf-8') as f:
                 return f.read(), None
     
-    return None, "文字起こし失敗"
+    # エラーの詳細を返す
+    error_msg = result.stderr if result.stderr else result.stdout
+    return None, f"文字起こし失敗: {error_msg[:200]}"
 
 # Instagram用関数
 def get_instagram_profile(account_name, login_user=None):
