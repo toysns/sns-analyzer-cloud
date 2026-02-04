@@ -278,13 +278,13 @@ with tab1:
         # 選択数を表示
         st.info(f"📌 {len(selected_indices)}本の動画を選択中")
         
-    if selected_indices:
-            
-        # Step 3: 文字起こし
-        st.markdown("---")
-        st.subheader("🚀 Step 3: 文字起こし & スプレッドシート保存")
+        if selected_indices:
+                
+            # Step 3: 文字起こし
+            st.markdown("---")
+            st.subheader("🚀 Step 3: 文字起こし & スプレッドシート保存")
 
-                if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="tiktok_transcribe"):
+            if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="tiktok_transcribe"):
                 df = st.session_state['tiktok_df']
                 selected_indices = st.session_state['tiktok_selected_indices']
                 account_name = st.session_state['tiktok_account_name']
