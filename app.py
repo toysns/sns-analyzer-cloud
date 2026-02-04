@@ -246,15 +246,50 @@ with tab1:
                     selection[i] = True
                 st.session_state['tiktok_selection'] = selection
         
+        # クイック選択ボタン（5列に拡張）
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            if st.button("📊 上位10本", use_container_width=True, key="tiktok_top10"):
+                selection = [False] * len(df)
+                for i in range(min(10, len(df))):
+                    selection[i] = True
+                st.session_state['tiktok_selection'] = selection
+                st.rerun()
+        
+        with col2:
+            if st.button("⚖️ 上位5本+下位5本", use_container_width=True, key="tiktok_mixed"):
+                selection = [False] * len(df)
+                for i in list(range(min(5, len(df)))) + list(range(max(0, len(df)-5), len(df))):
+                    selection[i] = True
+                st.session_state['tiktok_selection'] = selection
+                st.rerun()
+        
+        with col3:
+            if st.button("🎲 ランダム10本", use_container_width=True, key="tiktok_random"):
+                import random
+                selection = [False] * len(df)
+                for i in random.sample(range(len(df)), min(10, len(df))):
+                    selection[i] = True
+                st.session_state['tiktok_selection'] = selection
+                st.rerun()
+        
         with col4:
+            if st.button("✅ 全選択", use_container_width=True, key="tiktok_select_all"):
+                st.session_state['tiktok_selection'] = [True] * len(df)
+                st.rerun()
+        
+        with col5:
             if st.button("🔄 選択解除", use_container_width=True, key="tiktok_clear"):
                 st.session_state['tiktok_selection'] = [False] * len(df)
+                st.rerun()
         
-        # 表示用データフレームを作成（選択列を追加）
+        # 表示用データフレームを作成（選択列と元のインデックスを追加）
         display_df = df[['順位', 'タイトル', '再生回数', 'いいね数', 'コメント数', '投稿日時']].copy()
+        display_df.insert(0, '_original_index', range(len(df)))  # 元のインデックスを追加
         display_df.insert(0, '選択', st.session_state['tiktok_selection'][:len(display_df)])
         
-        # 編集可能なデータテーブル（ヘッダークリックでソート可能）
+        # 編集可能なデータテーブル（ヘッダークリックでソート可能、keyを追加してソート状態を保持）
         edited_df = st.data_editor(
             display_df,
             column_config={
@@ -262,21 +297,29 @@ with tab1:
                     "選択",
                     help="文字起こしする動画をチェック",
                     default=False,
-                )
+                ),
+                "_original_index": None  # 非表示
             },
-            disabled=['順位', 'タイトル', '再生回数', 'いいね数', 'コメント数', '投稿日時'],
+            disabled=['順位', 'タイトル', '再生回数', 'いいね数', 'コメント数', '投稿日時', '_original_index'],
             hide_index=True,
             use_container_width=True,
-            height=600
+            height=600,
+            key="tiktok_data_editor"  # ← ソート状態を保持
         )
         
-        # 選択状態を保存
-        st.session_state['tiktok_selection'] = edited_df['選択'].tolist()
-        selected_indices = [i for i, selected in enumerate(edited_df['選択']) if selected]
+        # 選択状態を更新（元のインデックスを使用）
+        new_selection = [False] * len(df)
+        for idx in range(len(edited_df)):
+            original_idx = int(edited_df.iloc[idx]['_original_index'])
+            new_selection[original_idx] = edited_df.iloc[idx]['選択']
+        
+        st.session_state['tiktok_selection'] = new_selection
+        selected_indices = [i for i, selected in enumerate(new_selection) if selected]
         st.session_state['tiktok_selected_indices'] = selected_indices
         
         # 選択数を表示
         st.info(f"📌 {len(selected_indices)}本の動画を選択中")
+        
         
         if selected_indices:
                 
