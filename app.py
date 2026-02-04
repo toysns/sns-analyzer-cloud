@@ -104,6 +104,9 @@ def get_metadata(account_name):
 
 def transcribe_video(video_url, output_dir):
     """動画を文字起こし（TikTok用）"""
+    # 出力ディレクトリを作成
+    os.makedirs(output_dir, exist_ok=True)
+    
     script_path = str(Path(__file__).parent / "instagram_transcriber.py")
     result = subprocess.run(
         ['python3', script_path, video_url],
