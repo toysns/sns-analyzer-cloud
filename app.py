@@ -284,7 +284,7 @@ with tab1:
         st.markdown("---")
         st.subheader("🚀 Step 3: 文字起こし & スプレッドシート保存")
 
-            if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="tiktok_transcribe"):
+                if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="tiktok_transcribe"):
                 df = st.session_state['tiktok_df']
                 selected_indices = st.session_state['tiktok_selected_indices']
                 account_name = st.session_state['tiktok_account_name']
