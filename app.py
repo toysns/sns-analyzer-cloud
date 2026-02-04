@@ -217,34 +217,10 @@ with tab1:
         
         df = st.session_state['tiktok_df']
         
+        
         # 選択状態の初期化
         if 'tiktok_selection' not in st.session_state:
             st.session_state['tiktok_selection'] = [False] * len(df)
-        
-        # クイック選択ボタン
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if st.button("📊 上位10本", use_container_width=True, key="tiktok_top10"):
-                selection = [False] * len(df)
-                for i in range(min(10, len(df))):
-                    selection[i] = True
-                st.session_state['tiktok_selection'] = selection
-        
-        with col2:
-            if st.button("⚖️ 上位5本+下位5本", use_container_width=True, key="tiktok_mixed"):
-                selection = [False] * len(df)
-                for i in list(range(min(5, len(df)))) + list(range(max(0, len(df)-5), len(df))):
-                    selection[i] = True
-                st.session_state['tiktok_selection'] = selection
-        
-        with col3:
-            if st.button("🎲 ランダム10本", use_container_width=True, key="tiktok_random"):
-                import random
-                selection = [False] * len(df)
-                for i in random.sample(range(len(df)), min(10, len(df))):
-                    selection[i] = True
-                st.session_state['tiktok_selection'] = selection
         
         # クイック選択ボタン（5列に拡張）
         col1, col2, col3, col4, col5 = st.columns(5)
