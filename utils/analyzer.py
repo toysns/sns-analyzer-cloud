@@ -1,0 +1,220 @@
+"""SNS account analysis engine using OpenAI GPT-4o with SKILL.md framework."""
+
+import logging
+import os
+from pathlib import Path
+
+from openai import OpenAI
+
+logger = logging.getLogger(__name__)
+
+SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
+ANALYSIS_MODES = {
+    1: ("成功要因抽出", "なぜこのアカウントがうまくいってるか分析する"),
+    2: ("ブラッシュアップ提案", "さらに伸ばすための具体的な改善策を提案する"),
+    3: ("コンセプト壁打ち", "方向性の検証、ピボット判断を行う"),
+    4: ("競合分析", "同ジャンルの競合との差別化ポイントを分析する"),
+    5: ("新規アカウント設計", "ゼロからの立ち上げ戦略を設計する"),
+}
+
+MODE_INSTRUCTIONS = {
+    1: """分析モード: 成功要因抽出
+このアカウントがなぜ成功しているのかを分析してください。
+特に以下に注力:
+- 需要と供給の一致度
+- 変数/定数の使い方の巧みさ
+- フォーマット選択の適切さ
+- 心理トリガーの活用度
+最終的に「再現可能な成功法則」として言語化してください。""",
+
+    2: """分析モード: ブラッシュアップ提案
+このアカウントの良い点を活かしつつ、さらに伸ばすための改善策を提案してください。
+STEP 6の改善提案を特に充実させ、以下を必ず含めてください:
+- 致命的/重要/改良余地の3段階で分類した改善点
+- 具体的なアクションプラン（今すぐ/1週間以内/1ヶ月以内）
+- 横展開・応用提案""",
+
+    3: """分析モード: コンセプト壁打ち
+このアカウントのコンセプト（Who×What×How）が正しい方向を向いているか検証してください。
+以下の観点で判断:
+- 需要Aは実在するか？市場規模は十分か？
+- 変数/定数の設定は適切か？
+- ピボットすべき要素はあるか？
+- 現在のコンセプトの延長で成長余地はあるか？""",
+
+    4: """分析モード: 競合分析
+このアカウントが属するジャンルの競合環境を分析し、差別化ポイントを特定してください。
+以下を含めてください:
+- 同ジャンルでよく見るフォーマットの整理
+- このアカウントの変数化ポイント（差別化要因）
+- 競合に対する優位性と劣位性
+- 市場ポジショニングの提案""",
+
+    5: """分析モード: 新規アカウント設計
+提供されたデータを参考に、新規アカウントの立ち上げ戦略を設計してください。
+以下を含めてください:
+- 推奨コンセプト（Who×What×How）
+- 需要Aの定義
+- 変数/定数の設計
+- 推奨フォーマット
+- 初期コンテンツ戦略（最初の30投稿の方向性）
+- マネタイズ設計""",
+}
+
+
+def _load_skill_files():
+    """Load SKILL.md and all reference files.
+
+    Returns:
+        str: Combined content of all skill files.
+    """
+    parts = []
+
+    skill_path = SKILLS_DIR / "SKILL.md"
+    if skill_path.exists():
+        parts.append(skill_path.read_text(encoding="utf-8"))
+
+    refs_dir = SKILLS_DIR / "references"
+    if refs_dir.exists():
+        for ref_file in sorted(refs_dir.glob("*.md")):
+            content = ref_file.read_text(encoding="utf-8")
+            parts.append(f"\n---\n## 参照: {ref_file.stem}\n\n{content}")
+
+    return "\n".join(parts)
+
+
+def _build_system_prompt(mode):
+    """Build the system prompt with SKILL framework and mode instructions.
+
+    Args:
+        mode: Analysis mode number (1-5).
+
+    Returns:
+        str: System prompt.
+    """
+    skill_content = _load_skill_files()
+    mode_instruction = MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS[2])
+
+    return f"""あなたはSNSアカウント分析の専門家です。以下の分析フレームワークに厳密に従って分析を行ってください。
+
+{mode_instruction}
+
+---
+
+{skill_content}
+
+---
+
+**重要な注意事項:**
+- 必ず上記の6ステップ分析フローに沿って分析を行うこと
+- 出力フォーマットに従ってマークダウン形式でレポートを作成すること
+- 具体的かつ実用的な分析を心がけ、抽象的な表現を避けること
+- 参照ファイル（フォーマット辞書、心理トリガー、失敗パターン集）の知見を積極的に活用すること
+- 分析対象の投稿内容（文字起こし）がある場合は、実際の内容に基づいて分析すること"""
+
+
+def _build_user_prompt(account_data, transcripts):
+    """Build the user prompt with account data and transcripts.
+
+    Args:
+        account_data: Dict with account info (name, platform, followers, etc.).
+        transcripts: List of dicts with video data and transcripts.
+
+    Returns:
+        str: User prompt.
+    """
+    parts = ["以下のアカウントを分析してください。\n"]
+
+    # Account basic info
+    parts.append("## アカウント基本情報")
+    parts.append(f"- プラットフォーム: {account_data.get('platform', '不明')}")
+    parts.append(f"- アカウント名: {account_data.get('name', '不明')}")
+    if account_data.get("followers"):
+        parts.append(f"- フォロワー数: {account_data['followers']}")
+    if account_data.get("total_posts"):
+        parts.append(f"- 総投稿数: {account_data['total_posts']}")
+    if account_data.get("profile_text"):
+        parts.append(f"- プロフィール文: {account_data['profile_text']}")
+    if account_data.get("external_link"):
+        parts.append(f"- 外部リンク: {account_data['external_link']}")
+    parts.append("")
+
+    # Video data with transcripts
+    if transcripts:
+        parts.append("## 投稿データ（再生数順）\n")
+        for i, t in enumerate(transcripts, 1):
+            parts.append(f"### 投稿{i}: {t.get('title', '無題')}")
+            if t.get("view_count"):
+                parts.append(f"- 再生回数: {t['view_count']:,}")
+            if t.get("like_count"):
+                parts.append(f"- いいね数: {t['like_count']:,}")
+            if t.get("comment_count"):
+                parts.append(f"- コメント数: {t['comment_count']:,}")
+            if t.get("upload_date"):
+                parts.append(f"- 投稿日: {t['upload_date']}")
+            if t.get("url"):
+                parts.append(f"- URL: {t['url']}")
+            if t.get("transcript"):
+                parts.append(f"\n**文字起こし:**\n{t['transcript']}")
+            parts.append("")
+
+    # Additional context
+    if account_data.get("supplement"):
+        parts.append(f"## 補足情報\n{account_data['supplement']}\n")
+
+    # Top/bottom posts for manual analysis
+    if account_data.get("top_posts"):
+        parts.append("## 伸びている投稿（上位）")
+        parts.append(account_data["top_posts"])
+        parts.append("")
+    if account_data.get("bottom_posts"):
+        parts.append("## 伸びていない投稿（下位）")
+        parts.append(account_data["bottom_posts"])
+        parts.append("")
+
+    return "\n".join(parts)
+
+
+def run_analysis(account_data, transcripts, mode, openai_api_key):
+    """Run SNS account analysis using OpenAI GPT-4o.
+
+    Args:
+        account_data: Dict with account info.
+        transcripts: List of dicts with video data and transcripts.
+        mode: Analysis mode number (1-5).
+        openai_api_key: OpenAI API key.
+
+    Returns:
+        Tuple of (report: str | None, error: str | None).
+    """
+    try:
+        system_prompt = _build_system_prompt(mode)
+        user_prompt = _build_user_prompt(account_data, transcripts)
+
+        client = OpenAI(api_key=openai_api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=8000,
+        )
+
+        report = response.choices[0].message.content
+        if not report:
+            return None, "分析レポートが空です"
+
+        return report, None
+
+    except Exception as e:
+        error_msg = str(e)
+        if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
+            return None, "OpenAI APIキーが無効です"
+        if "rate" in error_msg.lower():
+            return None, "APIレート制限に達しました。少し待ってから再試行してください。"
+        if "model" in error_msg.lower():
+            return None, f"モデルエラー: {error_msg[:200]}"
+        return None, f"分析エラー: {error_msg[:300]}"

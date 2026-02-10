@@ -1,914 +1,465 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""SNS Analyzer - TikTok/Instagram account analysis tool."""
+
+import json
+import os
+import re
 
 import streamlit as st
-import subprocess
-import json
-import csv
-from pathlib import Path
-import os
-from datetime import datetime
-import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
-# ページ設定
-st.set_page_config(
-    page_title="SNS分析ツール（TikTok & Instagram）",
-    page_icon="🎬",
-    layout="wide"
+from utils.session import init_session_state, clear_analysis_state
+from utils.tiktok_fetcher import (
+    extract_username,
+    fetch_tiktok_profile,
+    fetch_tiktok_videos,
+    videos_to_dataframe,
+    sample_videos_for_analysis,
+)
+from utils.transcriber import transcribe_video_url
+from utils.sheets import get_sheets_client, save_videos_to_sheet
+from utils.analyzer import run_analysis, ANALYSIS_MODES
+from utils.report import (
+    export_report_text,
+    generate_filename,
+    prepare_sheets_data,
 )
 
-# Googleスプレッドシート認証
-@st.cache_resource
-def get_google_sheets_client():
-    """Googleスプレッドシートクライアントを取得"""
-    try:
-        # Streamlit Secretsから認証情報を取得
-        if 'google_credentials' in st.secrets:
-            creds_dict = dict(st.secrets['google_credentials'])
-        else:
-            st.error("❌ Google認証情報が設定されていません")
-            st.info("💡 Streamlit Secretsに`google_credentials`を設定してください")
-            return None
-        
-        scope = [
-            'https://spreadsheets.google.com/feeds',
-            'https://www.googleapis.com/auth/drive'
-        ]
-        
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        
-        return client
-    except Exception as e:
-        st.error(f"Google認証エラー: {str(e)}")
-        return None
-        return None
+# --- Page Config ---
+st.set_page_config(
+    page_title="SNS Analyzer",
+    page_icon="📊",
+    layout="wide",
+)
 
-def save_to_google_sheets(client, account_name, videos_data, platform="tiktok"):
-    """Googleスプレッドシートに保存（アカウントごとにシート分け）"""
-    try:
-        # スプレッドシートを開く
-        spreadsheet = client.open("TikTok分析データベース")
-        
-        # シート名（プラットフォーム接頭辞付き）
-        sheet_name = f"{platform}_{account_name}" if platform == "instagram" else account_name
-        
-        # シートが存在するか確認
-        try:
-            worksheet = spreadsheet.worksheet(sheet_name)
-            # 既存シートがあれば削除して再作成
-            spreadsheet.del_worksheet(worksheet)
-        except:
-            pass
-        
-        # 新しいシートを作成
-        worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=10)
-        
-        # ヘッダー行
-        headers = ['日時', '順位', 'タイトル', '再生回数', 'いいね数', 'コメント数', '投稿日時', '文字起こし', 'URL']
-        worksheet.append_row(headers)
-        
-        # データ行を追加
-        for video in videos_data:
-            row = [
-                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                str(video.get('順位', '')),
-                str(video.get('タイトル', '')),
-                str(video.get('再生回数', '')),
-                str(video.get('いいね数', '')),
-                str(video.get('コメント数', '')),
-                str(video.get('投稿日時', '')),
-                str(video.get('文字起こし', '')),
-                str(video.get('URL', ''))
-            ]
-            worksheet.append_row(row)
-        
-        # スプレッドシートのURLを返す
-        return True, spreadsheet.url
-        
-    except Exception as e:
-        return False, str(e)
+# --- Initialize ---
+init_session_state()
 
-# TikTok用関数
-def get_metadata(account_name):
-    """TikTokアカウントのメタデータを取得"""
-    script_path = str(Path(__file__).parent / "tiktok_metadata.py")
-    result = subprocess.run(
-        ['python3', script_path, account_name],
-        capture_output=True,
-        text=True
-    )
-    return result.returncode == 0
+# --- API Key Check ---
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
-def transcribe_video(video_url, output_dir):
-    """動画を文字起こし（TikTok用）"""
-    # 出力ディレクトリを作成
-    os.makedirs(output_dir, exist_ok=True)
-    
-    script_path = str(Path(__file__).parent / "instagram_transcriber.py")
-    result = subprocess.run(
-        ['python3', script_path, video_url, output_dir],
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode == 0:
-        # 文字起こし結果を取得
-        output_files = [f for f in os.listdir(output_dir) if f.endswith('.txt')]
-        if output_files:
-            latest_file = max([os.path.join(output_dir, f) for f in output_files], key=os.path.getmtime)
-            with open(latest_file, 'r', encoding='utf-8') as f:
-                return f.read(), None
-    
-    # エラーの詳細を返す
-    error_msg = result.stderr if result.stderr else result.stdout
-    return None, f"文字起こし失敗: {error_msg[:200]}"
 
-# Instagram用関数
-def get_instagram_profile(account_name, login_user=None):
-    """Instagramアカウントのプロフィール情報のみ取得"""
-    try:
-        import instaloader
-        L = instaloader.Instaloader()
-        
-        # ログイン処理
-        if login_user:
-            session_file = os.path.expanduser(f"~/.instaloader-session")
-            if os.path.exists(session_file):
-                L.load_session_from_file(login_user, session_file)
-        
-        # プロフィール取得
-        profile = instaloader.Profile.from_username(L.context, account_name)
-        
-        return {
-            'username': profile.username,
-            'followers': profile.followers,
-            'mediacount': profile.mediacount,
-            'full_name': profile.full_name
+def _detect_platform(url):
+    """Detect platform from URL."""
+    if "tiktok.com" in url:
+        return "tiktok"
+    if "instagram.com" in url:
+        return "instagram"
+    return None
+
+
+# ==============================================================================
+# Tab 1: Auto Analysis
+# ==============================================================================
+
+def render_auto_analysis_tab():
+    """Render the main auto-analysis tab."""
+    st.header("自動分析")
+    st.caption("TikTokアカウントURLを入力すると、メタデータ取得→文字起こし→分析レポート生成まで自動で行います")
+
+    # --- Step 1: URL Input ---
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        url_input = st.text_input(
+            "アカウントURL またはユーザー名",
+            placeholder="https://www.tiktok.com/@username または @username",
+            key="url_input",
+        )
+    with col2:
+        mode = st.selectbox(
+            "分析モード",
+            options=list(ANALYSIS_MODES.keys()),
+            format_func=lambda x: f"{x}. {ANALYSIS_MODES[x][0]}",
+            index=1,  # Default: ブラッシュアップ
+            key="analysis_mode",
+        )
+
+    if not url_input:
+        st.info("TikTokのアカウントURL（例: https://www.tiktok.com/@username）を入力してください。")
+        return
+
+    # Detect platform
+    platform = _detect_platform(url_input)
+    if platform == "instagram":
+        st.warning("Instagramアカウントが検出されました。「手動分析」タブでInstagram分析ができます。")
+        return
+    if platform is None and not url_input.startswith("@") and "/" not in url_input:
+        platform = "tiktok"  # Assume username input is TikTok
+
+    username = extract_username(url_input)
+    if not username:
+        st.error("ユーザー名を取得できませんでした。URLを確認してください。")
+        return
+
+    st.session_state["account_name"] = username
+    st.session_state["platform"] = "TikTok"
+
+    # --- Step 2: Metadata Fetch ---
+    if st.session_state.get("tiktok_videos") is None:
+        if st.button("分析開始", type="primary", key="start_analysis"):
+            _run_auto_analysis(username, mode)
+    else:
+        # Show existing results and allow re-analysis
+        _show_analysis_results(username, mode)
+
+
+def _run_auto_analysis(username, mode):
+    """Execute the full auto-analysis pipeline."""
+    # Step 2: Fetch metadata
+    with st.status("分析を実行中...", expanded=True) as status:
+        st.write("Step 1/5: メタデータを取得中...")
+        profile = fetch_tiktok_profile(username)
+        videos = fetch_tiktok_videos(username)
+
+        if videos is None:
+            status.update(label="メタデータ取得に失敗しました", state="error")
+            st.error(
+                "TikTokのメタデータ取得に失敗しました。"
+                "TikTokのアクセス制限の可能性があります。"
+                "「手動分析」タブでデータを手動入力して分析できます。"
+            )
+            return
+
+        st.session_state["tiktok_profile"] = profile
+        st.session_state["tiktok_videos"] = videos
+        st.session_state["tiktok_df"] = videos_to_dataframe(videos)
+
+        st.write(f"  → {len(videos)}本の動画を取得しました")
+        if profile:
+            st.write(f"  → フォロワー: {profile.get('followers', '不明')}")
+
+        # Step 3: Select videos for transcription
+        st.write("Step 2/5: 分析対象の動画を選択中...")
+        selected = sample_videos_for_analysis(videos)
+        st.write(f"  → {len(selected)}本を自動選択（上位+中間+下位）")
+
+        # Step 4: Transcribe
+        st.write("Step 3/5: 文字起こし中...")
+        transcripts = []
+        progress_bar = st.progress(0)
+        for i, video in enumerate(selected):
+            st.write(f"  → [{i+1}/{len(selected)}] {video['title'][:30]}...")
+            transcript, error = transcribe_video_url(video["url"], OPENAI_API_KEY)
+            video_with_transcript = dict(video)
+            if transcript:
+                video_with_transcript["transcript"] = transcript
+            else:
+                video_with_transcript["transcript"] = f"(文字起こし失敗: {error})"
+                st.write(f"    ⚠ {error}")
+            transcripts.append(video_with_transcript)
+            progress_bar.progress((i + 1) / len(selected))
+
+        st.session_state["transcription_results"] = transcripts
+
+        # Step 5: Save to Google Sheets
+        st.write("Step 4/5: スプレッドシートに保存中...")
+        _save_to_sheets(transcripts, username, "tiktok")
+
+        # Step 6: Run AI Analysis
+        st.write("Step 5/5: GPT-4oで分析レポートを生成中...")
+        account_data = {
+            "platform": "TikTok",
+            "name": username,
+            "followers": profile.get("followers", "不明") if profile else "不明",
+            "total_posts": len(videos),
         }
-    except Exception as e:
-        return None
+        report, error = run_analysis(account_data, transcripts, mode, OPENAI_API_KEY)
 
-def transcribe_instagram_video(video_url, output_dir):
-    """Instagram動画を文字起こし"""
-    return transcribe_video(video_url, output_dir)
-
-# メインUI
-st.title("🎬 SNS分析ツール（TikTok & Instagram）")
-
-# タブUI
-tab1, tab2, tab3 = st.tabs(["📱 TikTok", "📸 Instagram", "🤖 Claude分析テンプレート"])
-
-# =====================
-# TikTokタブ
-# =====================
-with tab1:
-    st.header("TikTok分析")
-    
-    # Step 1: メタデータ取得
-    st.subheader("📝 Step 1: アカウント情報取得")
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        account_name = st.text_input(
-            "TikTokアカウント名（@なし）",
-            placeholder="例: toysns",
-            key="tiktok_account"
-        )
-    
-    with col2:
-        st.write("")
-        st.write("")
-        fetch_button = st.button("🔍 取得", use_container_width=True, key="tiktok_fetch")
-    
-    if fetch_button and account_name:
-        with st.spinner("メタデータ取得中..."):
-            if get_metadata(account_name):
-                # CSVファイルを読み込み
-                csv_file = str(Path("/tmp") / f"tiktok_{account_name}_metadata.csv")
-                
-                if os.path.exists(csv_file):
-                    df = pd.read_csv(csv_file)
-                    
-                    # セッション状態に保存
-                    st.session_state['tiktok_df'] = df
-                    st.session_state['tiktok_account_name'] = account_name
-                    
-                    st.success("✅ 取得完了！")
-                    
-                    # 統計情報表示
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("総投稿数", f"{len(df)}本")
-                    with col2:
-                        avg_views = int(df['再生回数'].mean())
-                        st.metric("平均再生数", f"{avg_views:,}回")
-                    with col3:
-                        total_likes = int(df['いいね数'].sum())
-                        st.metric("総いいね数", f"{total_likes:,}")
-                else:
-                    st.error("CSVファイルが見つかりません")
-            else:
-                st.error("メタデータ取得に失敗しました")
-    
-    # Step 2: 動画選択
-    if 'tiktok_df' in st.session_state:
-        st.markdown("---")
-        st.subheader("🎯 Step 2: 動画選択")
-        
-        df = st.session_state['tiktok_df']
-        
-        
-        # 選択状態の初期化
-        if 'tiktok_selection' not in st.session_state:
-            st.session_state['tiktok_selection'] = [False] * len(df)
-        
-        # クイック選択ボタン（5列に拡張）
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            if st.button("📊 上位10本", use_container_width=True, key="tiktok_top10"):
-                selection = [False] * len(df)
-                for i in range(min(10, len(df))):
-                    selection[i] = True
-                st.session_state['tiktok_selection'] = selection
-                st.rerun()
-        
-        with col2:
-            if st.button("⚖️ 上位5本+下位5本", use_container_width=True, key="tiktok_mixed"):
-                selection = [False] * len(df)
-                for i in list(range(min(5, len(df)))) + list(range(max(0, len(df)-5), len(df))):
-                    selection[i] = True
-                st.session_state['tiktok_selection'] = selection
-                st.rerun()
-        
-        with col3:
-            if st.button("🎲 ランダム10本", use_container_width=True, key="tiktok_random"):
-                import random
-                selection = [False] * len(df)
-                for i in random.sample(range(len(df)), min(10, len(df))):
-                    selection[i] = True
-                st.session_state['tiktok_selection'] = selection
-                st.rerun()
-        
-        with col4:
-            if st.button("✅ 全選択", use_container_width=True, key="tiktok_select_all"):
-                st.session_state['tiktok_selection'] = [True] * len(df)
-                st.rerun()
-        
-        with col5:
-            if st.button("🔄 選択解除", use_container_width=True, key="tiktok_clear"):
-                st.session_state['tiktok_selection'] = [False] * len(df)
-                st.rerun()
-        
-        # 表示用データフレームを作成（選択列と元のインデックスを追加）
-        display_df = df[['順位', 'タイトル', '再生回数', 'いいね数', 'コメント数', '投稿日時']].copy()
-        display_df.insert(0, '_original_index', range(len(df)))  # 元のインデックスを追加
-        display_df.insert(0, '選択', st.session_state['tiktok_selection'][:len(display_df)])
-        
-        # 編集可能なデータテーブル（ヘッダークリックでソート可能、keyを追加してソート状態を保持）
-        edited_df = st.data_editor(
-            display_df,
-            column_config={
-                "選択": st.column_config.CheckboxColumn(
-                    "選択",
-                    help="文字起こしする動画をチェック",
-                    default=False,
-                ),
-                "_original_index": None  # 非表示
-            },
-            disabled=['順位', 'タイトル', '再生回数', 'いいね数', 'コメント数', '投稿日時', '_original_index'],
-            hide_index=True,
-            use_container_width=True,
-            height=600,
-            key="tiktok_data_editor"  # ← ソート状態を保持
-        )
-        
-        # 選択状態を更新（元のインデックスを使用）
-        new_selection = [False] * len(df)
-        for idx in range(len(edited_df)):
-            original_idx = int(edited_df.iloc[idx]['_original_index'])
-            new_selection[original_idx] = edited_df.iloc[idx]['選択']
-        
-        st.session_state['tiktok_selection'] = new_selection
-        selected_indices = [i for i, selected in enumerate(new_selection) if selected]
-        st.session_state['tiktok_selected_indices'] = selected_indices
-        
-        # 選択数を表示
-        st.info(f"📌 {len(selected_indices)}本の動画を選択中")
-        
-        
-        if selected_indices:
-                
-            # Step 3: 文字起こし
-            st.markdown("---")
-            st.subheader("🚀 Step 3: 文字起こし & スプレッドシート保存")
-
-            if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="tiktok_transcribe"):
-                df = st.session_state['tiktok_df']
-                selected_indices = st.session_state['tiktok_selected_indices']
-                account_name = st.session_state['tiktok_account_name']
-                output_dir = str(Path("/tmp") / "instagram_transcripts")
-                
-                # Googleスプレッドシートクライアント取得
-                client = get_google_sheets_client()
-                
-                if client is None:
-                    st.error("❌ Googleスプレッドシート認証に失敗しました")
-                    st.stop()
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                results = []
-                
-                for i, idx in enumerate(selected_indices):
-                    row = df.iloc[idx]
-                    video_url = row['URL']
-                    
-                    status_text.text(f"処理中: {i+1}/{len(selected_indices)} - {row['タイトル'][:30]}...")
-                    
-                    # 文字起こし実行
-                    transcript, error = transcribe_video(video_url, output_dir)
-                    
-                    # デバッグ用：エラーを表示
-                    if error:
-                        st.error(f"❌ 動画 {idx+1}: {error}")
-                    
-                    if transcript:
-                        results.append({
-                            '順位': f"{idx+1}位",
-                            'タイトル': str(row['タイトル']),
-                            '再生回数': f"{row['再生回数']:,}回",
-                            'いいね数': f"{row['いいね数']:,}",
-                            'コメント数': f"{row['コメント数']:,}",
-                            '投稿日時': str(row['投稿日時']),
-                            '文字起こし': transcript,
-                            'URL': str(video_url)
-                        })
-                    
-                    progress_bar.progress((i + 1) / len(selected_indices))
-                
-                status_text.text("文字起こし完了！Googleスプレッドシートに保存中...")
-                
-                # Googleスプレッドシートに保存
-                success, result = save_to_google_sheets(client, account_name, results, platform="tiktok")
-                
-                # 結果をセッション状態に保存
-                st.session_state['tiktok_transcription_results'] = {
-                    'success': success,
-                    'result': result,
-                    'results': results,
-                    'account_name': account_name,
-                    'df': df,
-                    'output_dir': output_dir
-                }
-                
-                if success:
-                    st.success("✅ 完了！")
-                    st.markdown(f"### 📊 スプレッドシート")
-                    st.markdown(f"[{result}]({result})")
-                    st.markdown(f"→ シート「**{account_name}**」に保存されました")
-                    
-                    # 結果ディレクトリも開く
-                    st.info(f"📁 ローカルファイル: `{output_dir}`")
-                else:
-                    st.error(f"❌ 保存エラー: {result}")
-
-# Claude分析用テキスト生成（TikTok）
-if 'tiktok_transcription_results' in st.session_state and st.session_state['tiktok_transcription_results']['success']:
-    st.markdown("---")
-    st.markdown("### 🤖 Claude分析用テキスト生成")
-    st.markdown("分析に最適な5本を自動選択してフォーマットします")
-    
-    # セッション状態の初期化
-    if 'tiktok_show_analysis_text' not in st.session_state:
-        st.session_state.tiktok_show_analysis_text = False
-    
-    # ボタンを常に表示
-    if st.button("📊 Claude分析用テキストを生成", use_container_width=True, type="secondary", key="tiktok_generate_analysis"):
-        st.session_state.tiktok_show_analysis_text = True
-    
-    # テキストを生成して表示
-    if st.session_state.tiktok_show_analysis_text:
-        trans_data = st.session_state['tiktok_transcription_results']
-        results = trans_data['results']
-        account_name = trans_data['account_name']
-        df = trans_data['df']
-        
-        # サンプリングロジック: 5本を選択
-        total = len(results)
-        
-        if total >= 5:
-            # 上位2本
-            top_2 = results[:2]
-            # 中位2本
-            mid_start = total // 2 - 1
-            mid_2 = results[mid_start:mid_start+2]
-            # 下位1本
-            bottom_1 = [results[-1]]
-            
-            sampled = top_2 + mid_2 + bottom_1
-        elif total >= 3:
-            # 3-4本の場合は上位2本+下位1本
-            sampled = results[:2] + [results[-1]]
+        if report:
+            st.session_state["analysis_report"] = report
+            status.update(label="分析完了!", state="complete")
         else:
-            # 3本未満の場合は全部
-            sampled = results
-        
-        # 基本データの計算
-        total_videos = len(df)
-        avg_views = int(df['再生回数'].mean())
-        
-        # 分析用テキストを生成
-        analysis_text = f"""# {account_name} アカウント分析
+            status.update(label="分析レポート生成に失敗しました", state="error")
+            st.error(f"分析エラー: {error}")
+            return
 
-## 基本データ
-- アカウント名: @{account_name}
-- 総投稿数: {total_videos}本
-- 平均再生数: {avg_views:,}回
+    # Show results
+    _show_analysis_results(username, mode)
 
-## 分析対象動画（{len(sampled)}本）
 
-"""
-        
-        for i, video in enumerate(sampled, 1):
-            analysis_text += f"""### {video['順位']} - {video['再生回数']}
-- **タイトル:** {video['タイトル']}
-- **いいね:** {video['いいね数']}
-- **コメント:** {video['コメント数']}
-- **投稿日時:** {video['投稿日時']}
-- **URL:** {video['URL']}
-
-**文字起こし:**
-```
-{video['文字起こし']}
-```
-
----
-
-"""
-        
-        # expanderで折りたたみ式に
-        with st.expander("📋 分析用テキストを表示（クリックして展開）", expanded=True):
-            st.text_area(
-                "このテキストをコピーしてClaudeに貼り付けてください 👇",
-                analysis_text,
-                height=400,
-                key="tiktok_analysis_textarea"
+def _show_analysis_results(username, mode):
+    """Display analysis results."""
+    # Video list
+    if st.session_state.get("tiktok_df") is not None:
+        with st.expander(f"取得した動画一覧（{len(st.session_state['tiktok_df'])}本）", expanded=False):
+            st.dataframe(
+                st.session_state["tiktok_df"],
+                use_container_width=True,
+                hide_index=True,
             )
-        
-        st.success("✅ 分析用テキストを生成しました！上記をコピーしてClaudeに貼り付けてください。")
 
-# =====================
-# Instagramタブ
-# =====================
-with tab2:
-    st.header("Instagram分析")
-    
-    # Step 1: アカウント情報取得
-    st.subheader("📝 Step 1: アカウント情報取得")
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        instagram_account = st.text_input(
-            "Instagramアカウント名（@なし）",
-            placeholder="例: susumetamachans",
-            key="instagram_account"
+    # Transcription results
+    if st.session_state.get("transcription_results"):
+        with st.expander("文字起こし結果", expanded=False):
+            for t in st.session_state["transcription_results"]:
+                st.markdown(f"**{t.get('title', '無題')[:50]}** (再生: {t.get('view_count', 0):,})")
+                st.text(t.get("transcript", "")[:500])
+                st.divider()
+
+    # Analysis report
+    if st.session_state.get("analysis_report"):
+        st.subheader("分析レポート")
+        st.markdown(st.session_state["analysis_report"])
+
+        # Download button
+        mode_name = ANALYSIS_MODES.get(mode, ("不明",))[0]
+        report_text = export_report_text(
+            st.session_state["analysis_report"],
+            username,
+            "TikTok",
+            mode_name,
         )
-    
-    with col2:
-        st.write("")
-        st.write("")
-        instagram_fetch_button = st.button("🔍 取得", use_container_width=True, key="instagram_fetch")
-    
-    if instagram_fetch_button and instagram_account:
-        with st.spinner("プロフィール情報取得中..."):
-            # ログインユーザーがあればセッションから取得
-            login_user = st.session_state.get('instagram_login_user', None)
-            profile = get_instagram_profile(instagram_account, login_user)
-            
-            if profile:
-                st.session_state['instagram_profile'] = profile
-                st.session_state['instagram_account_name'] = instagram_account
-                
-                st.success("✅ 取得完了！")
-                
-                # プロフィール情報表示
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("フォロワー数", f"{profile['followers']:,}")
-                with col2:
-                    st.metric("投稿数", f"{profile['mediacount']}")
-                with col3:
-                    st.metric("アカウント名", profile['username'])
-            else:
-                st.error("プロフィール情報の取得に失敗しました")
-                st.info("💡 ヒント: 非公開アカウントの場合はログインが必要です")
-    
-    # Step 2: URL入力
-    if 'instagram_profile' in st.session_state:
-        st.markdown("---")
-        st.subheader("📋 Step 2: 分析対象動画URLを入力")
-        
-        st.info("💡 Instagramで分析したい動画を開き、URLをコピーして1行1個で貼り付けてください")
-        
-        instagram_urls = st.text_area(
-            "動画URL（1行1個）",
-            placeholder="https://www.instagram.com/p/XXX/\nhttps://www.instagram.com/p/YYY/\nhttps://www.instagram.com/p/ZZZ/",
-            height=200,
-            key="instagram_urls_input"
+        filename = generate_filename(username, "tiktok")
+        st.download_button(
+            "レポートをダウンロード",
+            data=report_text,
+            file_name=filename,
+            mime="text/markdown",
         )
-        
-        # URLをパース
-        if instagram_urls:
-            urls = [url.strip() for url in instagram_urls.split('\n') if url.strip()]
-            st.info(f"✅ {len(urls)}本の動画URLが入力されています")
-            
-            # Step 3用に保存（別のキー名を使用）
-            if 'instagram_url_list' not in st.session_state:
-                st.session_state['instagram_url_list'] = []
-            st.session_state['instagram_url_list'] = urls
-        
-        # Step 3: 文字起こし
-        if 'instagram_url_list' in st.session_state and st.session_state['instagram_url_list']:
-            st.markdown("---")
-            st.subheader("🚀 Step 3: 文字起こし & スプレッドシート保存")
-            
-            if st.button("▶️ 文字起こし開始", use_container_width=True, type="primary", key="instagram_transcribe"):
-                urls = st.session_state['instagram_url_list']
-                account_name = st.session_state['instagram_account_name']
-                output_dir = str(Path("/tmp") / "instagram_transcripts")
-                
-                # Googleスプレッドシートクライアント取得
-                client = get_google_sheets_client()
-                
-                if client is None:
-                    st.error("❌ Googleスプレッドシート認証に失敗しました")
-                    st.stop()
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                results = []
-                
-                for i, url in enumerate(urls):
-                    status_text.text(f"処理中: {i+1}/{len(urls)} - {url[:50]}...")
-                    
-                    # 文字起こし実行
-                    transcript, error = transcribe_instagram_video(url, output_dir)
-                    
-                    if transcript:
-                        results.append({
-                            '順位': f"{i+1}",
-                            'タイトル': url.split('/')[-2] if '/' in url else url,  # shortcode
-                            '再生回数': '',  # Instagramは非公開
-                            'いいね数': '',
-                            'コメント数': '',
-                            '投稿日時': '',
-                            '文字起こし': transcript,
-                            'URL': str(url)
-                        })
-                    
-                    progress_bar.progress((i + 1) / len(urls))
-                
-                status_text.text("文字起こし完了！Googleスプレッドシートに保存中...")
-                
-                # Googleスプレッドシートに保存
-                success, result = save_to_google_sheets(client, account_name, results, platform="instagram")
-                
-                # 結果をセッション状態に保存
-                st.session_state['instagram_transcription_results'] = {
-                    'success': success,
-                    'result': result,
-                    'results': results,
-                    'account_name': account_name,
-                    'profile': st.session_state['instagram_profile'],
-                    'output_dir': output_dir
-                }
-                
-                if success:
-                    st.success("✅ 完了！")
-                    st.markdown(f"### 📊 スプレッドシート")
-                    st.markdown(f"[{result}]({result})")
-                    st.markdown(f"→ シート「**instagram_{account_name}**」に保存されました")
-                    
-                    # 結果ディレクトリも開く
-                    st.info(f"📁 ローカルファイル: `{output_dir}`")
-                else:
-                    st.error(f"❌ 保存エラー: {result}")
 
-# Claude分析用テキスト生成（Instagram）
-if 'instagram_transcription_results' in st.session_state and st.session_state['instagram_transcription_results']['success']:
-    st.markdown("---")
-    st.markdown("### 🤖 Claude分析用テキスト生成")
-    st.markdown("分析に最適な動画を自動選択してフォーマットします")
-    
-    # セッション状態の初期化
-    if 'instagram_show_analysis_text' not in st.session_state:
-        st.session_state.instagram_show_analysis_text = False
-    
-    # ボタンを常に表示
-    if st.button("📊 Claude分析用テキストを生成", use_container_width=True, type="secondary", key="instagram_generate_analysis"):
-        st.session_state.instagram_show_analysis_text = True
-    
-    # テキストを生成して表示
-    if st.session_state.instagram_show_analysis_text:
-        trans_data = st.session_state['instagram_transcription_results']
-        results = trans_data['results']
-        account_name = trans_data['account_name']
-        profile = trans_data['profile']
-        
-        # サンプリングロジック
-        total = len(results)
-        
-        if total >= 5:
-            top_2 = results[:2]
-            mid_start = total // 2 - 1
-            mid_2 = results[mid_start:mid_start+2]
-            bottom_1 = [results[-1]]
-            sampled = top_2 + mid_2 + bottom_1
-        elif total >= 3:
-            sampled = results[:2] + [results[-1]]
-        else:
-            sampled = results
-        
-        # 分析用テキストを生成
-        analysis_text = f"""# {account_name} アカウント分析（Instagram）
+    # Reset button
+    if st.button("新しい分析を開始", key="reset_auto"):
+        clear_analysis_state()
+        st.rerun()
 
-## 基本データ
-- アカウント名: @{account_name}
-- フォロワー数: {profile['followers']:,}
-- 総投稿数: {profile['mediacount']}本
 
-## 分析対象動画（{len(sampled)}本）
+def _save_to_sheets(transcripts, account_name, platform_prefix):
+    """Save transcription data to Google Sheets."""
+    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
+    if not creds_raw:
+        st.write("  ⚠ GOOGLE_CREDENTIALS が設定されていません。スプレッドシート保存をスキップ。")
+        return
 
-"""
-        
-        for i, video in enumerate(sampled, 1):
-            analysis_text += f"""### {i}番目 - {video['URL']}
-- **URL:** {video['URL']}
+    client = get_sheets_client(creds_raw)
+    if not client:
+        st.write("  ⚠ Google Sheets認証に失敗しました。スキップ。")
+        return
 
-**文字起こし:**
-```
-{video['文字起こし']}
-```
+    sheet_name = f"{platform_prefix}_{account_name}" if platform_prefix == "instagram" else account_name
+    rows = prepare_sheets_data(transcripts, account_name)
+    success, msg = save_videos_to_sheet(client, sheet_name, rows)
 
----
+    if success:
+        st.write(f"  → 保存完了")
+        st.session_state["sheets_saved"] = True
+    else:
+        st.write(f"  ⚠ 保存失敗: {msg}")
 
-"""
-        
-        # expanderで折りたたみ式に
-        with st.expander("📋 分析用テキストを表示（クリックして展開）", expanded=True):
-            st.text_area(
-                "このテキストをコピーしてClaudeに貼り付けてください 👇",
-                analysis_text,
-                height=400,
-                key="instagram_analysis_textarea"
-            )
-        
-        st.success("✅ 分析用テキストを生成しました！上記をコピーしてClaudeに貼り付けてください。")
 
-# =====================
-# Claude分析テンプレートタブ
-# =====================
-with tab3:
-    st.header("🤖 Claude分析テンプレート生成")
-    st.markdown("**SNS分析スキルv2.0**に最適化されたテンプレートを生成します")
-    
-    # Step 1: 基本情報
-    st.subheader("📝 Step 1: 基本情報")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        template_account_name = st.text_input(
-            "アカウント名",
-            placeholder="@example",
-            key="template_account"
-        )
-        template_followers = st.text_input(
-            "フォロワー数",
-            placeholder="1.2万",
-            key="template_followers"
-        )
-        template_platform = st.selectbox(
-            "プラットフォーム",
-            ["TikTok", "Instagram", "YouTube"],
-            key="template_platform"
-        )
-    
-    with col2:
-        template_posts = st.text_input(
-            "投稿数",
-            placeholder="50本",
-            key="template_posts"
-        )
-        template_period = st.text_input(
-            "運用期間",
-            placeholder="6ヶ月",
-            key="template_period"
-        )
-        template_frequency = st.text_input(
-            "投稿頻度",
-            placeholder="週2回",
-            key="template_frequency"
-        )
-    
-    # Step 2: 分析モード選択
-    st.markdown("---")
-    st.subheader("🎯 Step 2: 分析モード選択")
-    
-    analysis_mode = st.radio(
-        "どのモードで分析しますか？",
-        [
-            "モード2：ブラッシュアップ案（推奨）- さらに伸ばすための具体的改善策",
-            "モード1：成功要因抽出 - なぜこのアカウントがうまくいってるか分析",
-            "モード3：コンセプト壁打ち - 方向性の検証、ピボット判断"
-        ],
-        key="template_mode"
-    )
-    
-    # モード番号を抽出
-    mode_number = analysis_mode.split("：")[0].replace("モード", "")
-    
-    # Step 3: コンセプト（任意）
-    st.markdown("---")
-    st.subheader("💡 Step 3: コンセプト（わかる範囲で）")
-    
+# ==============================================================================
+# Tab 2: Manual Analysis
+# ==============================================================================
+
+def render_manual_analysis_tab():
+    """Render the manual analysis tab for any platform."""
+    st.header("手動分析")
+    st.caption("メタデータや文字起こしテキストを手動で入力して分析します。Instagramアカウントの分析もこちらから。")
+
+    # Account info
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        concept_who = st.text_area(
-            "Who（誰に）",
-            placeholder="例: 過去に副業で失敗した20代社会人",
-            height=100,
-            key="template_who"
-        )
-    
+        platform = st.selectbox("プラットフォーム", ["TikTok", "Instagram"], key="manual_platform")
     with col2:
-        concept_what = st.text_area(
-            "What（何を）",
-            placeholder="例: 副業の失敗談と教訓",
-            height=100,
-            key="template_what"
-        )
-    
+        account_name = st.text_input("アカウント名", key="manual_account_name")
     with col3:
-        concept_how = st.text_area(
-            "How（どのように）",
-            placeholder="例: 1分動画、失敗談→教訓の2部構成",
-            height=100,
-            key="template_how"
+        followers = st.text_input("フォロワー数", key="manual_followers")
+
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        total_posts = st.text_input("総投稿数", key="manual_total_posts")
+    with col5:
+        posting_freq = st.text_input("投稿頻度（例: 週3本）", key="manual_freq")
+    with col6:
+        mode = st.selectbox(
+            "分析モード",
+            options=list(ANALYSIS_MODES.keys()),
+            format_func=lambda x: f"{x}. {ANALYSIS_MODES[x][0]}",
+            index=1,
+            key="manual_mode",
         )
-    
-    # Step 4: 伸びてる投稿データ
-    st.markdown("---")
-    st.subheader("📊 Step 4: 伸びてる投稿データ（上位10本）")
-    st.markdown("💡 **形式**: `投稿日 | テーマ | 再生数 | いいね | コメント | 保存`（各項目を `|` で区切る）")
-    
-    top_posts_input = st.text_area(
-        "上位10投稿（1行1投稿）",
-        placeholder="""2024/01/15 | 投資で50万損した話 | 25万 | 5000 | 300 | 800
-2024/01/20 | 副業詐欺に遭った話 | 20万 | 4000 | 250 | 600
-2024/01/25 | ギャンブルで100万溶かした話 | 18万 | 3500 | 200 | 500""",
-        height=250,
-        key="template_top_posts"
-    )
-    
-    # Step 5: 伸びてない投稿データ
-    st.markdown("---")
-    st.subheader("📉 Step 5: 伸びてない投稿データ（下位10本）")
-    
-    bottom_posts_input = st.text_area(
-        "下位10投稿（1行1投稿）",
-        placeholder="""2024/02/01 | 成功するコツ | 2万 | 400 | 20 | 50
-2024/02/05 | 稼ぐ方法 | 1.5万 | 350 | 15 | 40
-2024/02/10 | 効率化テクニック | 1万 | 300 | 10 | 30""",
-        height=250,
-        key="template_bottom_posts"
-    )
-    
-    # Step 6: 補足情報（任意）
-    st.markdown("---")
-    st.subheader("📝 Step 6: 補足情報（任意）")
-    
-    supplement = st.text_area(
-        "その他気になる点・特記事項",
-        placeholder="例: ターゲット層は20代社会人、副業に興味あり。コメント欄は共感コメントが多い。保存率が低い。",
+
+    profile_text = st.text_area("プロフィール文", key="manual_profile", height=80)
+
+    st.subheader("投稿データ")
+    st.caption("伸びてる投稿と伸びてない投稿の情報を入力してください。形式: 日付 | テーマ | 再生数 | いいね | コメント（1行1投稿）")
+
+    col_top, col_bottom = st.columns(2)
+    with col_top:
+        top_posts = st.text_area(
+            "伸びてる投稿（上位5-10本）",
+            key="manual_top_posts",
+            height=200,
+            placeholder="2025-12-01 | 朝ルーティン | 100,000 | 5,000 | 200",
+        )
+    with col_bottom:
+        bottom_posts = st.text_area(
+            "伸びてない投稿（下位5-10本）",
+            key="manual_bottom_posts",
+            height=200,
+            placeholder="2025-12-05 | 商品レビュー | 1,000 | 50 | 3",
+        )
+
+    # Optional: video URLs for transcription
+    st.subheader("動画文字起こし（任意）")
+    video_urls_text = st.text_area(
+        "文字起こししたい動画のURL（1行1URL）",
+        key="manual_video_urls",
         height=100,
-        key="template_supplement"
+        placeholder="https://www.tiktok.com/@user/video/123...\nhttps://www.instagram.com/reel/ABC...",
     )
-    
-    # 生成ボタン
-    st.markdown("---")
-    
-    if st.button("🚀 Claude分析用テンプレートを生成", use_container_width=True, type="primary", key="generate_template"):
-        
-        # 投稿データをパース
-        def parse_posts(text):
-            lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
-            posts = []
-            for line in lines:
-                parts = [p.strip() for p in line.split('|')]
-                if len(parts) >= 6:
-                    posts.append({
-                        '投稿日': parts[0],
-                        'テーマ': parts[1],
-                        '再生数': parts[2],
-                        'いいね': parts[3],
-                        'コメント': parts[4],
-                        '保存': parts[5]
+
+    # Or paste transcripts directly
+    manual_transcripts_text = st.text_area(
+        "または文字起こしテキストを直接入力",
+        key="manual_transcripts_text",
+        height=200,
+        placeholder="投稿1のテキスト...\n---\n投稿2のテキスト...",
+    )
+
+    supplement = st.text_area("補足情報（任意）", key="manual_supplement", height=80)
+
+    if st.button("分析を実行", type="primary", key="run_manual_analysis"):
+        if not account_name:
+            st.error("アカウント名を入力してください。")
+            return
+
+        transcripts = []
+
+        # Transcribe videos if URLs provided
+        if video_urls_text.strip():
+            urls = [u.strip() for u in video_urls_text.strip().split("\n") if u.strip()]
+            with st.status(f"{len(urls)}本の動画を文字起こし中...") as status:
+                for i, url in enumerate(urls):
+                    st.write(f"[{i+1}/{len(urls)}] {url[:60]}...")
+                    transcript, error = transcribe_video_url(url, OPENAI_API_KEY)
+                    transcripts.append({
+                        "title": f"投稿{i+1}",
+                        "url": url,
+                        "transcript": transcript if transcript else f"(失敗: {error})",
                     })
-            return posts
-        
-        top_posts = parse_posts(top_posts_input) if top_posts_input else []
-        bottom_posts = parse_posts(bottom_posts_input) if bottom_posts_input else []
-        
-        # テンプレート生成
-        template_output = f"""# SNSアカウント分析依頼
+                status.update(label="文字起こし完了", state="complete")
 
-## 基本情報
-- アカウント名：{template_account_name if template_account_name else '（入力なし）'}
-- プラットフォーム：{template_platform}
-- フォロワー数：{template_followers if template_followers else '（入力なし）'}
-- 投稿数：{template_posts if template_posts else '（入力なし）'}
-- 運用期間：{template_period if template_period else '（入力なし）'}
-- 投稿頻度：{template_frequency if template_frequency else '（入力なし）'}
+        # Parse manual transcripts
+        elif manual_transcripts_text.strip():
+            for i, text in enumerate(manual_transcripts_text.strip().split("---"), 1):
+                text = text.strip()
+                if text:
+                    transcripts.append({
+                        "title": f"投稿{i}",
+                        "transcript": text,
+                    })
 
-## 分析モード
-モード{mode_number}
+        # Build account data
+        account_data = {
+            "platform": platform,
+            "name": account_name,
+            "followers": followers,
+            "total_posts": total_posts,
+            "posting_freq": posting_freq,
+            "profile_text": profile_text,
+            "top_posts": top_posts,
+            "bottom_posts": bottom_posts,
+            "supplement": supplement,
+        }
 
-## コンセプト（わかる範囲で）
-- Who：{concept_who if concept_who else '（入力なし）'}
-- What：{concept_what if concept_what else '（入力なし）'}
-- How：{concept_how if concept_how else '（入力なし）'}
+        # Run analysis
+        with st.spinner("GPT-4oで分析中..."):
+            report, error = run_analysis(account_data, transcripts, mode, OPENAI_API_KEY)
 
-"""
-        
-        # 伸びてる投稿データ
-        if top_posts:
-            template_output += """## 伸びてる投稿（上位10本）
+        if report:
+            st.session_state["analysis_report"] = report
+            st.subheader("分析レポート")
+            st.markdown(report)
 
-| 投稿日 | テーマ | 再生数 | いいね | コメント | 保存 |
-|--------|--------|--------|--------|----------|------|
-"""
-            for post in top_posts:
-                template_output += f"| {post['投稿日']} | {post['テーマ']} | {post['再生数']} | {post['いいね']} | {post['コメント']} | {post['保存']} |\n"
-            template_output += "\n"
-        
-        # 伸びてない投稿データ
-        if bottom_posts:
-            template_output += """## 伸びてない投稿（下位10本）
-
-| 投稿日 | テーマ | 再生数 | いいね | コメント | 保存 |
-|--------|--------|--------|--------|----------|------|
-"""
-            for post in bottom_posts:
-                template_output += f"| {post['投稿日']} | {post['テーマ']} | {post['再生数']} | {post['いいね']} | {post['コメント']} | {post['保存']} |\n"
-            template_output += "\n"
-        
-        # 補足情報
-        if supplement:
-            template_output += f"""## 補足情報
-{supplement}
-
-"""
-        
-        # 依頼文
-        template_output += """---
-
-このアカウントを分析して、ブラッシュアップ案を提案してください。
-"""
-        
-        # 結果を表示
-        with st.expander("📋 生成されたテンプレート（クリックして展開）", expanded=True):
-            st.text_area(
-                "このテキストをコピーしてClaudeに貼り付けてください 👇",
-                template_output,
-                height=500,
-                key="generated_template_output"
+            # Download
+            mode_name = ANALYSIS_MODES.get(mode, ("不明",))[0]
+            report_text = export_report_text(report, account_name, platform, mode_name)
+            filename = generate_filename(account_name, platform.lower())
+            st.download_button(
+                "レポートをダウンロード",
+                data=report_text,
+                file_name=filename,
+                mime="text/markdown",
             )
-        
-        st.success("✅ テンプレート生成完了！上記をコピーしてClaudeに貼り付けてください。")
-        st.info("💡 **使い方**: Claudeに貼り付けると、SNS分析スキルv2.0が自動的に起動し、詳細な分析とブラッシュアップ案が提示されます。")
 
-# フッター
-st.markdown("---")
-st.markdown("**💡 使い方:**")
-st.markdown("### タブ1・2（TikTok/Instagram）")
-st.markdown("1. アカウント情報を取得")
-st.markdown("2. 分析対象を選択/入力")
-st.markdown("3. 文字起こし実行")
-st.markdown("4. Googleスプレッドシートに自動保存")
-st.markdown("5. Claude分析用テキストを生成")
-st.markdown("")
-st.markdown("### タブ3（Claude分析テンプレート）")
-st.markdown("1. 基本情報を入力（アカウント名、フォロワー数等）")
-st.markdown("2. 分析モードを選択")
-st.markdown("3. 伸びてる投稿 / 伸びてない投稿のデータを入力")
-st.markdown("4. テンプレート生成 → Claudeに貼り付け")
+            # Save to sheets
+            if transcripts:
+                _save_to_sheets(
+                    transcripts,
+                    account_name,
+                    "instagram" if platform == "Instagram" else "tiktok",
+                )
+        else:
+            st.error(f"分析に失敗しました: {error}")
+
+
+# ==============================================================================
+# Tab 3: Settings
+# ==============================================================================
+
+def render_settings_tab():
+    """Render the settings/diagnostics tab."""
+    st.header("設定・接続テスト")
+
+    # API Key status
+    st.subheader("APIキー状態")
+    if OPENAI_API_KEY:
+        st.success(f"OpenAI API Key: 設定済み (****{OPENAI_API_KEY[-4:]})")
+    else:
+        st.error("OpenAI API Key: 未設定 (環境変数 OPENAI_API_KEY を設定してください)")
+
+    # Google Sheets test
+    st.subheader("Google Sheets接続")
+    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
+    if creds_raw:
+        st.success("GOOGLE_CREDENTIALS: 設定済み")
+        if st.button("接続テスト", key="test_sheets"):
+            client = get_sheets_client(creds_raw)
+            if client:
+                spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "TikTok分析データベース")
+                try:
+                    spreadsheet = client.open(spreadsheet_name)
+                    st.success(f"スプレッドシート '{spreadsheet_name}' に接続成功! (URL: {spreadsheet.url})")
+                except Exception as e:
+                    st.error(f"スプレッドシートの取得に失敗: {e}")
+            else:
+                st.error("認証に失敗しました")
+    else:
+        st.warning("GOOGLE_CREDENTIALS: 未設定")
+
+    # System info
+    st.subheader("システム情報")
+    import subprocess
+    checks = {
+        "yt-dlp": ["yt-dlp", "--version"],
+        "ffmpeg": ["ffmpeg", "-version"],
+    }
+    for name, cmd in checks.items():
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            version = result.stdout.strip().split("\n")[0]
+            st.success(f"{name}: {version}")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            st.error(f"{name}: 未インストール")
+
+    # Analysis modes info
+    st.subheader("分析モード一覧")
+    for num, (name, desc) in ANALYSIS_MODES.items():
+        st.markdown(f"**{num}. {name}** - {desc}")
+
+
+# ==============================================================================
+# Main App
+# ==============================================================================
+
+st.title("📊 SNS Analyzer")
+st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します")
+
+tab1, tab2, tab3 = st.tabs(["自動分析", "手動分析", "設定"])
+
+with tab1:
+    render_auto_analysis_tab()
+
+with tab2:
+    render_manual_analysis_tab()
+
+with tab3:
+    render_settings_tab()

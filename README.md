@@ -1,195 +1,72 @@
-# 🎬 SNS分析ツール（TikTok & Instagram）- クラウド版
+# SNS Analyzer v2
 
-TikTokとInstagramのアカウント分析、動画文字起こし、Googleスプレッドシート連携を行うStreamlitアプリケーションです。
+TikTok/Instagramアカウントを自動分析し、改善レポートを生成するWebツール。
 
-## 🌟 機能
+## 機能
 
-### 📱 TikTok分析
-- アカウント情報の自動取得
-- 動画メタデータの取得（再生数、いいね、コメント数）
-- 選択した動画の自動文字起こし
-- Googleスプレッドシートへの自動保存
-- Claude分析用テキスト自動生成
+### 自動分析（TikTok）
+1. アカウントURL入力
+2. yt-dlpでメタデータ自動取得（最大100本）
+3. 上位+中間+下位から5本を自動選択
+4. OpenAI Whisper APIで文字起こし
+5. GPT-4oでSKILLフレームワーク準拠の分析レポート自動生成
+6. Googleスプレッドシートにデータ保存
 
-### 📸 Instagram分析
-- プロフィール情報の取得
-- リール動画の文字起こし
-- Googleスプレッドシートへの自動保存
-- Claude分析用テキスト自動生成
+### 手動分析（TikTok/Instagram）
+- メタデータ・文字起こしテキストを手動入力
+- 動画URLからの文字起こしも可能
+- 5つの分析モード対応
 
-### 🤖 Claude分析テンプレート
-- 手動入力による分析テンプレート生成
-- 複数の分析モード対応
-- SNS分析スキルv4.0との連携
+### 分析モード
+1. 成功要因抽出
+2. ブラッシュアップ提案
+3. コンセプト壁打ち
+4. 競合分析
+5. 新規アカウント設計
 
-## 📋 必要要件
+## セットアップ
 
-### システム要件
-- Python 3.9+
-- yt-dlp
-- ffmpeg
-- openai-whisper
+### 必要なもの
+- OpenAI APIキー（Whisper + GPT-4o）
+- Google Service Account JSON（スプレッドシート保存用）
 
-### Pythonパッケージ
-```
-streamlit>=1.28.0
-pandas>=2.0.0
-gspread>=5.11.0
-oauth2client>=4.1.3
-instaloader>=4.10.0
-yt-dlp>=2023.10.0
-openai-whisper>=20231117
-```
-
-### Google Cloud設定
-- Google Sheets API有効化
-- サービスアカウント作成
-- 認証情報JSON
-
-## 🚀 ローカルでの実行
-
-### 1. リポジトリのクローン
+### ローカル実行
 ```bash
-git clone https://github.com/your-username/sns-analyzer-cloud.git
-cd sns-analyzer-cloud
-```
+# 環境変数を設定
+export OPENAI_API_KEY="sk-..."
+export GOOGLE_CREDENTIALS='{"type":"service_account",...}'
+export SPREADSHEET_NAME="TikTok分析データベース"
 
-### 2. 依存パッケージのインストール
-```bash
+# 依存関係インストール
 pip install -r requirements.txt
-```
 
-### 3. Streamlit Secretsの設定
-`.streamlit/secrets.toml`を作成：
-```bash
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-```
-
-`secrets.toml`を編集して、Google認証情報を入力してください。
-
-### 4. アプリケーションの起動
-```bash
+# 起動
 streamlit run app.py
 ```
 
-ブラウザで http://localhost:8501 が開きます。
-
-## ☁️ Streamlit Cloudへのデプロイ
-
-詳細は [DEPLOY.md](docs/DEPLOY.md) を参照してください。
-
-### 簡易手順
-
-1. **GitHubリポジトリの作成**
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
-   git remote add origin https://github.com/your-username/sns-analyzer-cloud.git
-   git push -u origin main
-   ```
-
-2. **Streamlit Cloudでデプロイ**
-   - https://share.streamlit.io にアクセス
-   - GitHubアカウントでログイン
-   - "New app" をクリック
-   - リポジトリを選択
-   - Branch: `main`
-   - Main file path: `app.py`
-   - Deploy!
-
-3. **Secretsの設定**
-   - アプリの設定 > Secrets
-   - `.streamlit/secrets.toml.example`の内容をコピー
-   - Google認証情報を入力
-   - Save
-
-## 📖 使い方
-
-### TikTok分析
-
-1. **アカウント情報取得**
-   - TikTokアカウント名（@なし）を入力
-   - 「取得」ボタンをクリック
-
-2. **動画選択**
-   - 上位10本、上位5本+下位5本、ランダム10本から選択
-   - または手動で選択
-
-3. **文字起こし実行**
-   - 「文字起こし開始」ボタンをクリック
-   - Googleスプレッドシートに自動保存
-
-4. **Claude分析用テキスト生成**
-   - 自動的に最適な5本を選択
-   - コピーしてClaudeに貼り付け
-
-### Instagram分析
-
-1. **アカウント情報取得**
-   - Instagramアカウント名（@なし）を入力
-   - 「取得」ボタンをクリック
-
-2. **動画URL入力**
-   - 分析したい動画のURLを1行1個で入力
-
-3. **文字起こし実行**
-   - 「文字起こし開始」ボタンをクリック
-   - Googleスプレッドシートに自動保存
-
-### Claude分析テンプレート
-
-1. **基本情報入力**
-   - アカウント名、フォロワー数、投稿数など
-
-2. **分析モード選択**
-   - モード1〜5から選択
-
-3. **投稿データ入力**
-   - 伸びてる投稿（上位10本）
-   - 伸びてない投稿（下位10本）
-
-4. **テンプレート生成**
-   - コピーしてClaudeに貼り付け
-
-## 🔧 トラブルシューティング
-
-### yt-dlpが見つからない
+### Docker実行
 ```bash
-pip install yt-dlp
+docker build -t sns-analyzer .
+docker run -p 8501:8501 \
+  -e OPENAI_API_KEY="sk-..." \
+  -e GOOGLE_CREDENTIALS='...' \
+  -e SPREADSHEET_NAME="TikTok分析データベース" \
+  sns-analyzer
 ```
 
-### ffmpegが見つからない
-```bash
-# Mac
-brew install ffmpeg
+### Railwayデプロイ
+1. GitHubリポジトリをRailwayに接続
+2. 環境変数を設定: `OPENAI_API_KEY`, `GOOGLE_CREDENTIALS`, `SPREADSHEET_NAME`
+3. 自動デプロイ
 
-# Ubuntu/Debian
-sudo apt-get install ffmpeg
+## 技術スタック
+- Streamlit（Web UI）
+- yt-dlp（動画メタデータ・ダウンロード）
+- ffmpeg（音声抽出）
+- OpenAI Whisper API（文字起こし）
+- OpenAI GPT-4o（分析）
+- gspread（Googleスプレッドシート）
 
-# Windows
-# https://ffmpeg.org/download.html からダウンロード
-```
-
-### Whisperのインストール失敗
-```bash
-pip install openai-whisper --upgrade
-```
-
-### Google認証エラー
-- Streamlit Secretsが正しく設定されているか確認
-- Google Sheets APIが有効化されているか確認
-- サービスアカウントに適切な権限があるか確認
-
-## 📄 ライセンス
-
-MIT License
-
-## 🤝 貢献
-
-プルリクエスト歓迎！
-
-## 📧 お問い合わせ
-
-Issue を作成してください。
+## コスト
+- Railway: $5/月（基本料）
+- 1回の分析: 約$0.09（Whisper $0.06 + GPT-4o $0.03）
