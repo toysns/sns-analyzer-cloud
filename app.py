@@ -26,6 +26,11 @@ from utils.screenshot_reader import extract_metadata_from_screenshot
 from utils.visual_analyzer import analyze_video_visuals
 from utils.comment_analyzer import fetch_and_analyze_comments
 from utils.trend_analyzer import analyze_trends, format_trend_analysis
+from utils.competitor_analyzer import (
+    fetch_competitor_data,
+    format_competitor_comparison,
+    build_main_account_stats,
+)
 
 # --- Page Config ---
 st.set_page_config(
@@ -222,6 +227,18 @@ def _render_video_selector(username, mode):
 
     st.divider()
 
+    # Competitor accounts (optional)
+    with st.expander("🔍 競合アカウントを追加（任意）", expanded=False):
+        st.caption("競合アカウントのURLを入力すると、メタデータを取得して比較分析を行います")
+        competitor_input = st.text_area(
+            "競合アカウントURL（1行1アカウント、最大3つ）",
+            key="competitor_urls",
+            height=100,
+            placeholder="https://www.tiktok.com/@competitor1\nhttps://www.tiktok.com/@competitor2",
+        )
+
+    st.divider()
+
     # Selected count and analyze button
     st.markdown(f"**{selected_count}本**を選択中")
     if selected_count > 10:
@@ -325,12 +342,27 @@ def _run_analysis_with_selection(username, mode):
 
         st.session_state["transcription_results"] = transcripts
 
-        # Step 2: Save to Sheets
-        st.write("Step 2/3: スプレッドシートに保存中...")
+        # Step 2: Competitor analysis (if provided)
+        competitor_urls_raw = st.session_state.get("competitor_urls", "").strip()
+        competitor_text = ""
+        if competitor_urls_raw:
+            comp_urls = [u.strip() for u in competitor_urls_raw.split("\n") if u.strip()][:3]
+            st.write(f"Step 2/4: {len(comp_urls)}つの競合アカウントのデータを取得中...")
+            competitors = fetch_competitor_data(comp_urls)
+            main_stats = build_main_account_stats(videos, profile)
+            competitor_text = format_competitor_comparison(main_stats, competitors)
+            if competitor_text:
+                st.write(f"  → {len([c for c in competitors if 'error' not in c])}アカウントの比較データを取得")
+            step_offset = 1
+        else:
+            step_offset = 0
+
+        # Save to Sheets
+        st.write(f"Step {2 + step_offset}/{3 + step_offset}: スプレッドシートに保存中...")
         _save_to_sheets(transcripts, username, "tiktok")
 
-        # Step 3: AI Analysis
-        st.write("Step 3/3: Claude Sonnetで分析レポートを生成中...")
+        # AI Analysis
+        st.write(f"Step {3 + step_offset}/{3 + step_offset}: Claude Sonnetで分析レポートを生成中...")
 
         # Time-series trend analysis (uses existing metadata, no API call)
         trend_data = analyze_trends(videos)
@@ -342,6 +374,7 @@ def _run_analysis_with_selection(username, mode):
             "followers": profile.get("followers", "不明") if profile else "不明",
             "total_posts": len(videos),
             "trend_analysis": trend_text,
+            "competitor_comparison": competitor_text,
         }
         report, error = run_analysis(account_data, transcripts, mode, OPENAI_API_KEY)
 

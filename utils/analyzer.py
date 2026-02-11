@@ -116,6 +116,7 @@ def _build_system_prompt(mode):
 - 文字起こし（音声情報）と映像分析（視覚情報）の両方を統合し、総合的な分析を行うこと
 - コメント分析データがある場合は、オーディエンスの質・感情・マネタイズ可能性の評価に活用すること
 - 時系列トレンドデータがある場合は、成長トレンド・投稿頻度・曜日別パフォーマンス・バイラル傾向の分析に活用すること
+- 競合比較データがある場合は、差別化ポイント・優位性・劣位性を具体的に分析し、ポジショニング提案を行うこと
 - 各ステップの分析を省略せず、十分な深さと具体性を持って記述すること"""
 
 
@@ -171,6 +172,10 @@ def _build_user_prompt(account_data, transcripts):
     # Trend analysis
     if account_data.get("trend_analysis"):
         parts.append(f"## 時系列トレンド分析\n{account_data['trend_analysis']}\n")
+
+    # Competitor comparison
+    if account_data.get("competitor_comparison"):
+        parts.append(f"## 競合アカウント比較\n{account_data['competitor_comparison']}\n")
 
     # Additional context
     if account_data.get("supplement"):
