@@ -54,3 +54,8 @@ def clear_analysis_state():
     ]
     for key in keys_to_reset:
         st.session_state[key] = DEFAULTS.get(key)
+
+    # Clear video selection checkboxes
+    checkbox_keys = [k for k in st.session_state if k.startswith("video_check_")]
+    for key in checkbox_keys:
+        del st.session_state[key]

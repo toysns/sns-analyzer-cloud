@@ -50,10 +50,22 @@ def _detect_platform(url):
 # Tab 1: Auto Analysis
 # ==============================================================================
 
+SORT_OPTIONS = {
+    "再生回数（多い順）": ("view_count", False),
+    "再生回数（少ない順）": ("view_count", True),
+    "いいね数（多い順）": ("like_count", False),
+    "いいね数（少ない順）": ("like_count", True),
+    "コメント数（多い順）": ("comment_count", False),
+    "コメント数（少ない順）": ("comment_count", True),
+    "投稿日（新しい順）": ("upload_date", False),
+    "投稿日（古い順）": ("upload_date", True),
+}
+
+
 def render_auto_analysis_tab():
     """Render the main auto-analysis tab."""
     st.header("自動分析")
-    st.caption("TikTokアカウントURLを入力すると、メタデータ取得→文字起こし→分析レポート生成まで自動で行います")
+    st.caption("TikTokアカウントURLを入力 → 動画一覧から分析対象を選択 → 文字起こし+分析レポート生成")
 
     # --- Step 1: URL Input ---
     col1, col2 = st.columns([3, 1])
@@ -82,7 +94,7 @@ def render_auto_analysis_tab():
         st.warning("Instagramアカウントが検出されました。「手動分析」タブでInstagram分析ができます。")
         return
     if platform is None and not url_input.startswith("@") and "/" not in url_input:
-        platform = "tiktok"  # Assume username input is TikTok
+        platform = "tiktok"
 
     username = extract_username(url_input)
     if not username:
@@ -92,20 +104,25 @@ def render_auto_analysis_tab():
     st.session_state["account_name"] = username
     st.session_state["platform"] = "TikTok"
 
-    # --- Step 2: Metadata Fetch ---
+    # --- Phase 1: Fetch metadata ---
     if st.session_state.get("tiktok_videos") is None:
-        if st.button("分析開始", type="primary", key="start_analysis"):
-            _run_auto_analysis(username, mode)
-    else:
-        # Show existing results and allow re-analysis
-        _show_analysis_results(username, mode)
+        if st.button("動画を取得", type="primary", key="fetch_videos"):
+            _fetch_metadata(username)
+        return
+
+    # --- Phase 2: Video selection ---
+    if st.session_state.get("analysis_report") is None:
+        _render_video_selector(username, mode)
+        return
+
+    # --- Phase 3: Show results ---
+    _show_analysis_results(username, mode)
 
 
-def _run_auto_analysis(username, mode):
-    """Execute the full auto-analysis pipeline."""
-    # Step 2: Fetch metadata
-    with st.status("分析を実行中...", expanded=True) as status:
-        st.write("Step 1/5: メタデータを取得中...")
+def _fetch_metadata(username):
+    """Fetch TikTok account metadata."""
+    with st.status("メタデータを取得中...", expanded=True) as status:
+        st.write("アカウント情報を取得中...")
         profile = fetch_tiktok_profile(username)
         videos = fetch_tiktok_videos(username)
 
@@ -122,21 +139,140 @@ def _run_auto_analysis(username, mode):
         st.session_state["tiktok_videos"] = videos
         st.session_state["tiktok_df"] = videos_to_dataframe(videos)
 
-        st.write(f"  → {len(videos)}本の動画を取得しました")
+        msg = f"{len(videos)}本の動画を取得しました"
         if profile:
-            st.write(f"  → フォロワー: {profile.get('followers', '不明')}")
+            msg += f" | フォロワー: {profile.get('followers', '不明')}"
+        status.update(label=msg, state="complete")
 
-        # Step 3: Select videos for transcription
-        st.write("Step 2/5: 分析対象の動画を選択中...")
-        selected = sample_videos_for_analysis(videos)
-        st.write(f"  → {len(selected)}本を自動選択（上位+中間+下位）")
+    st.rerun()
 
-        # Step 4: Transcribe
-        st.write("Step 3/5: 文字起こし中...")
+
+def _render_video_selector(username, mode):
+    """Render video list with checkboxes and sort controls."""
+    videos = st.session_state["tiktok_videos"]
+    profile = st.session_state.get("tiktok_profile")
+
+    # Account summary
+    if profile:
+        st.markdown(f"**@{username}** | フォロワー: {profile.get('followers', '不明')} | 取得動画: {len(videos)}本")
+    else:
+        st.markdown(f"**@{username}** | 取得動画: {len(videos)}本")
+
+    st.divider()
+
+    # Sort controls
+    col_sort, col_select = st.columns([2, 2])
+    with col_sort:
+        sort_key = st.selectbox(
+            "並び替え",
+            options=list(SORT_OPTIONS.keys()),
+            key="sort_option",
+        )
+    with col_select:
+        col_all, col_none, col_auto = st.columns(3)
+        with col_all:
+            if st.button("全選択", key="select_all", use_container_width=True):
+                for i in range(len(videos)):
+                    st.session_state[f"video_check_{i}"] = True
+                st.rerun()
+        with col_none:
+            if st.button("全解除", key="select_none", use_container_width=True):
+                for i in range(len(videos)):
+                    st.session_state[f"video_check_{i}"] = False
+                st.rerun()
+        with col_auto:
+            if st.button("自動選択", key="select_auto", use_container_width=True):
+                auto_indices = _get_auto_select_indices(videos)
+                for i in range(len(videos)):
+                    st.session_state[f"video_check_{i}"] = i in auto_indices
+                st.rerun()
+
+    # Sort videos
+    sort_field, ascending = SORT_OPTIONS[sort_key]
+    indexed_videos = list(enumerate(videos))
+    indexed_videos.sort(
+        key=lambda x: x[1].get(sort_field, 0) or 0,
+        reverse=not ascending,
+    )
+
+    # Video list with checkboxes
+    st.markdown(f"**分析する動画を選択してください（{len(videos)}本中）**")
+
+    selected_count = 0
+    for original_idx, video in indexed_videos:
+        check_key = f"video_check_{original_idx}"
+        if check_key not in st.session_state:
+            st.session_state[check_key] = False
+
+        views = f"{video['view_count']:,}" if video.get('view_count') else "0"
+        likes = f"{video['like_count']:,}" if video.get('like_count') else "0"
+        comments = f"{video['comment_count']:,}" if video.get('comment_count') else "0"
+        date = video.get('upload_date', '')
+        title = video.get('title', '無題')[:60]
+
+        label = f"**{title}** | {views} 再生 | {likes} いいね | {comments} コメント | {date}"
+
+        checked = st.checkbox(label, key=check_key)
+        if checked:
+            selected_count += 1
+
+    st.divider()
+
+    # Selected count and analyze button
+    st.markdown(f"**{selected_count}本**を選択中")
+    if selected_count > 10:
+        st.warning("10本以上選択すると文字起こしのコストと時間がかかります。5-8本程度を推奨します。")
+
+    col_analyze, col_reset = st.columns([3, 1])
+    with col_analyze:
+        if st.button(
+            f"選択した{selected_count}本で分析を実行",
+            type="primary",
+            key="run_analysis",
+            disabled=selected_count == 0,
+        ):
+            _run_analysis_with_selection(username, mode)
+    with col_reset:
+        if st.button("最初からやり直す", key="reset_auto"):
+            clear_analysis_state()
+            st.rerun()
+
+
+def _get_auto_select_indices(videos):
+    """Get indices for auto-selection (top + middle + bottom)."""
+    n = len(videos)
+    if n == 0:
+        return set()
+    if n <= 2:
+        return set(range(n))
+    if n <= 4:
+        return {0, 1, n - 1}
+    mid = n // 2
+    return {0, 1, mid - 1, mid, n - 1}
+
+
+def _run_analysis_with_selection(username, mode):
+    """Execute analysis with user-selected videos."""
+    videos = st.session_state["tiktok_videos"]
+    profile = st.session_state.get("tiktok_profile")
+
+    # Gather selected videos
+    selected = []
+    for i, video in enumerate(videos):
+        if st.session_state.get(f"video_check_{i}", False):
+            selected.append(video)
+
+    if not selected:
+        st.error("動画が選択されていません。")
+        return
+
+    with st.status("分析を実行中...", expanded=True) as status:
+        # Transcribe
+        st.write(f"Step 1/3: {len(selected)}本の動画を文字起こし中...")
         transcripts = []
         progress_bar = st.progress(0)
         for i, video in enumerate(selected):
-            st.write(f"  → [{i+1}/{len(selected)}] {video['title'][:30]}...")
+            st.write(f"  [{i+1}/{len(selected)}] {video['title'][:30]}...")
             transcript, error = transcribe_video_url(video["url"], OPENAI_API_KEY)
             video_with_transcript = dict(video)
             if transcript:
@@ -149,12 +285,12 @@ def _run_auto_analysis(username, mode):
 
         st.session_state["transcription_results"] = transcripts
 
-        # Step 5: Save to Google Sheets
-        st.write("Step 4/5: スプレッドシートに保存中...")
+        # Save to Sheets
+        st.write("Step 2/3: スプレッドシートに保存中...")
         _save_to_sheets(transcripts, username, "tiktok")
 
-        # Step 6: Run AI Analysis
-        st.write("Step 5/5: Claude Sonnetで分析レポートを生成中...")
+        # AI Analysis
+        st.write("Step 3/3: Claude Sonnetで分析レポートを生成中...")
         account_data = {
             "platform": "TikTok",
             "name": username,
@@ -171,8 +307,7 @@ def _run_auto_analysis(username, mode):
             st.error(f"分析エラー: {error}")
             return
 
-    # Show results
-    _show_analysis_results(username, mode)
+    st.rerun()
 
 
 def _show_analysis_results(username, mode):
