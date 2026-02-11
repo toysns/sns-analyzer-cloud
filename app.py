@@ -154,7 +154,7 @@ def _run_auto_analysis(username, mode):
         _save_to_sheets(transcripts, username, "tiktok")
 
         # Step 6: Run AI Analysis
-        st.write("Step 5/5: GPT-4oで分析レポートを生成中...")
+        st.write("Step 5/5: Claude Sonnetで分析レポートを生成中...")
         account_data = {
             "platform": "TikTok",
             "name": username,
@@ -361,7 +361,7 @@ def render_manual_analysis_tab():
         }
 
         # Run analysis
-        with st.spinner("GPT-4oで分析中..."):
+        with st.spinner("Claude Sonnetで分析中..."):
             report, error = run_analysis(account_data, transcripts, mode, OPENAI_API_KEY)
 
         if report:
@@ -401,8 +401,13 @@ def render_settings_tab():
 
     # API Key status
     st.subheader("APIキー状態")
+    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    if ANTHROPIC_API_KEY:
+        st.success(f"Anthropic API Key: 設定済み (****{ANTHROPIC_API_KEY[-4:]})")
+    else:
+        st.error("Anthropic API Key: 未設定 (環境変数 ANTHROPIC_API_KEY を設定してください)")
     if OPENAI_API_KEY:
-        st.success(f"OpenAI API Key: 設定済み (****{OPENAI_API_KEY[-4:]})")
+        st.success(f"OpenAI API Key: 設定済み (****{OPENAI_API_KEY[-4:]}) — 文字起こし(Whisper)用")
     else:
         st.error("OpenAI API Key: 未設定 (環境変数 OPENAI_API_KEY を設定してください)")
 

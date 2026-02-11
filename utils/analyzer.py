@@ -1,10 +1,10 @@
-"""SNS account analysis engine using OpenAI GPT-4o with SKILL.md framework."""
+"""SNS account analysis engine using Anthropic Claude Sonnet with SKILL.md framework."""
 
 import logging
 import os
 from pathlib import Path
 
-from openai import OpenAI
+from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,8 @@ def _build_system_prompt(mode):
 - 出力フォーマットに従ってマークダウン形式でレポートを作成すること
 - 具体的かつ実用的な分析を心がけ、抽象的な表現を避けること
 - 参照ファイル（フォーマット辞書、心理トリガー、失敗パターン集）の知見を積極的に活用すること
-- 分析対象の投稿内容（文字起こし）がある場合は、実際の内容に基づいて分析すること"""
+- 分析対象の投稿内容（文字起こし）がある場合は、実際の内容に基づいて分析すること
+- 各ステップの分析を省略せず、十分な深さと具体性を持って記述すること"""
 
 
 def _build_user_prompt(account_data, transcripts):
@@ -177,33 +178,37 @@ def _build_user_prompt(account_data, transcripts):
 
 
 def run_analysis(account_data, transcripts, mode, openai_api_key):
-    """Run SNS account analysis using OpenAI GPT-4o.
+    """Run SNS account analysis using Anthropic Claude Sonnet.
 
     Args:
         account_data: Dict with account info.
         transcripts: List of dicts with video data and transcripts.
         mode: Analysis mode number (1-5).
-        openai_api_key: OpenAI API key.
+        openai_api_key: OpenAI API key (kept for Whisper; Anthropic key from env).
 
     Returns:
         Tuple of (report: str | None, error: str | None).
     """
     try:
+        anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not anthropic_api_key:
+            return None, "ANTHROPIC_API_KEY が設定されていません"
+
         system_prompt = _build_system_prompt(mode)
         user_prompt = _build_user_prompt(account_data, transcripts)
 
-        client = OpenAI(api_key=openai_api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o",
+        client = Anthropic(api_key=anthropic_api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=16000,
+            system=system_prompt,
             messages=[
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.7,
-            max_tokens=8000,
+            temperature=0.4,
         )
 
-        report = response.choices[0].message.content
+        report = response.content[0].text
         if not report:
             return None, "分析レポートが空です"
 
@@ -212,9 +217,7 @@ def run_analysis(account_data, transcripts, mode, openai_api_key):
     except Exception as e:
         error_msg = str(e)
         if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
-            return None, "OpenAI APIキーが無効です"
+            return None, "Anthropic APIキーが無効です"
         if "rate" in error_msg.lower():
             return None, "APIレート制限に達しました。少し待ってから再試行してください。"
-        if "model" in error_msg.lower():
-            return None, f"モデルエラー: {error_msg[:200]}"
         return None, f"分析エラー: {error_msg[:300]}"
