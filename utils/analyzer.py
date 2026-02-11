@@ -114,6 +114,8 @@ def _build_system_prompt(mode):
 - 分析対象の投稿内容（文字起こし）がある場合は、実際の内容に基づいて分析すること
 - 映像分析データ（キーフレーム解析）がある場合は、映像面の分析を必ず組み込むこと（撮影スタイル、テロップ、構図、編集手法、サムネイル力など）
 - 文字起こし（音声情報）と映像分析（視覚情報）の両方を統合し、総合的な分析を行うこと
+- コメント分析データがある場合は、オーディエンスの質・感情・マネタイズ可能性の評価に活用すること
+- 時系列トレンドデータがある場合は、成長トレンド・投稿頻度・曜日別パフォーマンス・バイラル傾向の分析に活用すること
 - 各ステップの分析を省略せず、十分な深さと具体性を持って記述すること"""
 
 
@@ -162,7 +164,13 @@ def _build_user_prompt(account_data, transcripts):
                 parts.append(f"\n**文字起こし:**\n{t['transcript']}")
             if t.get("visual_analysis"):
                 parts.append(f"\n**映像分析（キーフレーム解析）:**\n{t['visual_analysis']}")
+            if t.get("comment_analysis"):
+                parts.append(f"\n**コメント分析:**\n{t['comment_analysis']}")
             parts.append("")
+
+    # Trend analysis
+    if account_data.get("trend_analysis"):
+        parts.append(f"## 時系列トレンド分析\n{account_data['trend_analysis']}\n")
 
     # Additional context
     if account_data.get("supplement"):

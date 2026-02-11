@@ -24,6 +24,8 @@ from utils.report import (
 )
 from utils.screenshot_reader import extract_metadata_from_screenshot
 from utils.visual_analyzer import analyze_video_visuals
+from utils.comment_analyzer import fetch_and_analyze_comments
+from utils.trend_analyzer import analyze_trends, format_trend_analysis
 
 # --- Page Config ---
 st.set_page_config(
@@ -269,11 +271,11 @@ def _run_analysis_with_selection(username, mode):
         return
 
     with st.status("分析を実行中...", expanded=True) as status:
-        total_steps = len(selected) * 2  # transcribe + visual per video
+        total_steps = len(selected) * 3  # transcribe + visual + comments per video
         current_step = 0
 
-        # Step 1: Transcribe + Visual analysis per video
-        st.write(f"Step 1/3: {len(selected)}本の動画を文字起こし＋映像分析中...")
+        # Step 1: Transcribe + Visual + Comment analysis per video
+        st.write(f"Step 1/3: {len(selected)}本の動画を文字起こし＋映像分析＋コメント分析中...")
         transcripts = []
         progress_bar = st.progress(0)
         for i, video in enumerate(selected):
@@ -304,6 +306,21 @@ def _run_analysis_with_selection(username, mode):
             current_step += 1
             progress_bar.progress(current_step / total_steps)
 
+            # Comment analysis
+            st.write(f"  [{i+1}/{len(selected)}] {title_short} — コメント分析中...")
+            comment_text, comment_data, cmt_error = fetch_and_analyze_comments(
+                video["url"], OPENAI_API_KEY, max_comments=50
+            )
+            if comment_text:
+                video_with_transcript["comment_analysis"] = comment_text
+            elif cmt_error:
+                video_with_transcript["comment_analysis"] = f"(コメント分析失敗: {cmt_error})"
+                st.write(f"    ⚠ コメント: {cmt_error}")
+            else:
+                video_with_transcript["comment_analysis"] = "(コメントなし)"
+            current_step += 1
+            progress_bar.progress(current_step / total_steps)
+
             transcripts.append(video_with_transcript)
 
         st.session_state["transcription_results"] = transcripts
@@ -314,11 +331,17 @@ def _run_analysis_with_selection(username, mode):
 
         # Step 3: AI Analysis
         st.write("Step 3/3: Claude Sonnetで分析レポートを生成中...")
+
+        # Time-series trend analysis (uses existing metadata, no API call)
+        trend_data = analyze_trends(videos)
+        trend_text = format_trend_analysis(trend_data) if trend_data else ""
+
         account_data = {
             "platform": "TikTok",
             "name": username,
             "followers": profile.get("followers", "不明") if profile else "不明",
             "total_posts": len(videos),
+            "trend_analysis": trend_text,
         }
         report, error = run_analysis(account_data, transcripts, mode, OPENAI_API_KEY)
 
