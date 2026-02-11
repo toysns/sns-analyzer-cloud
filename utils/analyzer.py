@@ -112,6 +112,8 @@ def _build_system_prompt(mode):
 - 具体的かつ実用的な分析を心がけ、抽象的な表現を避けること
 - 参照ファイル（フォーマット辞書、心理トリガー、失敗パターン集）の知見を積極的に活用すること
 - 分析対象の投稿内容（文字起こし）がある場合は、実際の内容に基づいて分析すること
+- 映像分析データ（キーフレーム解析）がある場合は、映像面の分析を必ず組み込むこと（撮影スタイル、テロップ、構図、編集手法、サムネイル力など）
+- 文字起こし（音声情報）と映像分析（視覚情報）の両方を統合し、総合的な分析を行うこと
 - 各ステップの分析を省略せず、十分な深さと具体性を持って記述すること"""
 
 
@@ -158,6 +160,8 @@ def _build_user_prompt(account_data, transcripts):
                 parts.append(f"- URL: {t['url']}")
             if t.get("transcript"):
                 parts.append(f"\n**文字起こし:**\n{t['transcript']}")
+            if t.get("visual_analysis"):
+                parts.append(f"\n**映像分析（キーフレーム解析）:**\n{t['visual_analysis']}")
             parts.append("")
 
     # Additional context

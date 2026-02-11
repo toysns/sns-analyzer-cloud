@@ -23,6 +23,7 @@ from utils.report import (
     prepare_sheets_data,
 )
 from utils.screenshot_reader import extract_metadata_from_screenshot
+from utils.visual_analyzer import analyze_video_visuals
 
 # --- Page Config ---
 st.set_page_config(
@@ -268,12 +269,18 @@ def _run_analysis_with_selection(username, mode):
         return
 
     with st.status("分析を実行中...", expanded=True) as status:
-        # Transcribe
-        st.write(f"Step 1/3: {len(selected)}本の動画を文字起こし中...")
+        total_steps = len(selected) * 2  # transcribe + visual per video
+        current_step = 0
+
+        # Step 1: Transcribe + Visual analysis per video
+        st.write(f"Step 1/3: {len(selected)}本の動画を文字起こし＋映像分析中...")
         transcripts = []
         progress_bar = st.progress(0)
         for i, video in enumerate(selected):
-            st.write(f"  [{i+1}/{len(selected)}] {video['title'][:30]}...")
+            title_short = video['title'][:30] if video.get('title') else '無題'
+
+            # Transcription
+            st.write(f"  [{i+1}/{len(selected)}] {title_short} — 文字起こし中...")
             transcript, error = transcribe_video_url(video["url"], OPENAI_API_KEY)
             video_with_transcript = dict(video)
             if transcript:
@@ -281,16 +288,31 @@ def _run_analysis_with_selection(username, mode):
             else:
                 video_with_transcript["transcript"] = f"(文字起こし失敗: {error})"
                 st.write(f"    ⚠ {error}")
+            current_step += 1
+            progress_bar.progress(current_step / total_steps)
+
+            # Visual analysis
+            st.write(f"  [{i+1}/{len(selected)}] {title_short} — 映像分析中...")
+            visual_analysis, vis_error = analyze_video_visuals(
+                video["url"], OPENAI_API_KEY, num_frames=5
+            )
+            if visual_analysis:
+                video_with_transcript["visual_analysis"] = visual_analysis
+            else:
+                video_with_transcript["visual_analysis"] = f"(映像分析失敗: {vis_error})"
+                st.write(f"    ⚠ 映像分析: {vis_error}")
+            current_step += 1
+            progress_bar.progress(current_step / total_steps)
+
             transcripts.append(video_with_transcript)
-            progress_bar.progress((i + 1) / len(selected))
 
         st.session_state["transcription_results"] = transcripts
 
-        # Save to Sheets
+        # Step 2: Save to Sheets
         st.write("Step 2/3: スプレッドシートに保存中...")
         _save_to_sheets(transcripts, username, "tiktok")
 
-        # AI Analysis
+        # Step 3: AI Analysis
         st.write("Step 3/3: Claude Sonnetで分析レポートを生成中...")
         account_data = {
             "platform": "TikTok",
