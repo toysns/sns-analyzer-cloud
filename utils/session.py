@@ -24,6 +24,8 @@ DEFAULTS = {
     "manual_account_info": {},
     "manual_top_posts": "",
     "manual_bottom_posts": "",
+    # Screenshot
+    "screenshot_metadata": None,
     # Sheets
     "sheets_saved": False,
 }

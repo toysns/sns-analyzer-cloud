@@ -22,6 +22,7 @@ from utils.report import (
     generate_filename,
     prepare_sheets_data,
 )
+from utils.screenshot_reader import extract_metadata_from_screenshot
 
 # --- Page Config ---
 st.set_page_config(
@@ -387,6 +388,64 @@ def render_manual_analysis_tab():
     """Render the manual analysis tab for any platform."""
     st.header("手動分析")
     st.caption("メタデータや文字起こしテキストを手動で入力して分析します。Instagramアカウントの分析もこちらから。")
+
+    # --- Screenshot upload section ---
+    with st.expander("📸 スクリーンショットからデータを読み取る", expanded=False):
+        st.caption("プロフィール画面のスクショをアップロードすると、フォロワー数・投稿数・プロフィール文などを自動で読み取ります")
+        uploaded_file = st.file_uploader(
+            "プロフィールのスクリーンショット",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="screenshot_upload",
+        )
+        if uploaded_file is not None:
+            col_img, col_btn = st.columns([2, 1])
+            with col_img:
+                st.image(uploaded_file, caption="アップロードされた画像", use_container_width=True)
+            with col_btn:
+                if st.button("読み取り実行", type="primary", key="extract_screenshot"):
+                    with st.spinner("画像を解析中..."):
+                        image_bytes = uploaded_file.getvalue()
+                        metadata, error = extract_metadata_from_screenshot(image_bytes, OPENAI_API_KEY)
+                    if metadata:
+                        st.success("読み取り完了！下のフォームに自動入力しました")
+                        # Auto-fill form fields via session state
+                        if metadata.get("platform"):
+                            platform_map = {"TikTok": "TikTok", "Instagram": "Instagram"}
+                            detected = metadata["platform"]
+                            for key in platform_map:
+                                if key.lower() in detected.lower():
+                                    st.session_state["manual_platform"] = key
+                                    break
+                        if metadata.get("account_name"):
+                            st.session_state["manual_account_name"] = str(metadata["account_name"])
+                        if metadata.get("followers") is not None:
+                            st.session_state["manual_followers"] = str(metadata["followers"])
+                        if metadata.get("total_posts") is not None:
+                            st.session_state["manual_total_posts"] = str(metadata["total_posts"])
+                        if metadata.get("profile_text"):
+                            st.session_state["manual_profile"] = str(metadata["profile_text"])
+                        # Store extra metadata for display
+                        st.session_state["screenshot_metadata"] = metadata
+                        st.rerun()
+                    else:
+                        st.error(f"読み取りに失敗しました: {error}")
+
+    # Show extracted metadata summary if available
+    if st.session_state.get("screenshot_metadata"):
+        meta = st.session_state["screenshot_metadata"]
+        cols = []
+        if meta.get("followers") is not None:
+            cols.append(f"フォロワー: **{meta['followers']:,}**")
+        if meta.get("following") is not None:
+            cols.append(f"フォロー: **{meta['following']:,}**")
+        if meta.get("total_posts") is not None:
+            cols.append(f"投稿数: **{meta['total_posts']:,}**")
+        if meta.get("total_likes") is not None:
+            cols.append(f"いいね合計: **{meta['total_likes']:,}**")
+        if cols:
+            st.info("📸 読み取り結果: " + " | ".join(cols))
+
+    st.divider()
 
     # Account info
     col1, col2, col3 = st.columns(3)
