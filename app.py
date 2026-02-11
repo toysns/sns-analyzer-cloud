@@ -59,6 +59,14 @@ def _detect_platform(url):
 # Tab 1: Auto Analysis
 # ==============================================================================
 
+WHISPER_LANGUAGES = {
+    "日本語": "ja",
+    "English": "en",
+    "한국어": "ko",
+    "中文": "zh",
+    "自動検出": "auto",
+}
+
 SORT_OPTIONS = {
     "再生回数（多い順）": ("view_count", False),
     "再生回数（少ない順）": ("view_count", True),
@@ -77,7 +85,7 @@ def render_auto_analysis_tab():
     st.caption("TikTokアカウントURLを入力 → 動画一覧から分析対象を選択 → 文字起こし+分析レポート生成")
 
     # --- Step 1: URL Input ---
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         url_input = st.text_input(
             "アカウントURL またはユーザー名",
@@ -91,6 +99,13 @@ def render_auto_analysis_tab():
             format_func=lambda x: f"{x}. {ANALYSIS_MODES[x][0]}",
             index=1,  # Default: ブラッシュアップ
             key="analysis_mode",
+        )
+    with col3:
+        whisper_lang = st.selectbox(
+            "文字起こし言語",
+            options=list(WHISPER_LANGUAGES.keys()),
+            index=0,  # Default: 日本語
+            key="whisper_language",
         )
 
     if not url_input:
@@ -264,8 +279,15 @@ def _render_video_selector(username, mode):
 
     st.divider()
 
-    # Selected count and analyze button
+    # Selected count and cost estimate
     st.markdown(f"**{selected_count}本**を選択中")
+    if selected_count > 0:
+        cost_estimate = _estimate_cost(selected_count, enable_visual, enable_comments)
+        time_estimate = _estimate_time(selected_count, enable_visual, enable_comments)
+        st.caption(
+            f"💰 推定コスト: **${cost_estimate:.2f}** | "
+            f"⏱ 推定時間: **約{time_estimate}分**"
+        )
     if selected_count > 10:
         st.warning("10本以上選択すると文字起こしのコストと時間がかかります。5-8本程度を推奨します。")
 
@@ -282,6 +304,42 @@ def _render_video_selector(username, mode):
         if st.button("最初からやり直す", key="reset_auto"):
             clear_analysis_state()
             st.rerun()
+
+
+def _estimate_cost(video_count, visual=False, comments=False):
+    """Estimate API cost for the analysis run.
+
+    Approximate per-video costs:
+        - Whisper transcription: ~$0.006 (avg 1min audio)
+        - GPT-4o Vision (visual): ~$0.02 (5 frames)
+        - GPT-4o-mini (comments): ~$0.005
+        - Claude Sonnet report (fixed): ~$0.08
+    """
+    per_video = 0.006  # Whisper
+    if visual:
+        per_video += 0.02
+    if comments:
+        per_video += 0.005
+    report_cost = 0.08  # Claude Sonnet
+    return video_count * per_video + report_cost
+
+
+def _estimate_time(video_count, visual=False, comments=False):
+    """Estimate processing time in minutes.
+
+    Approximate per-video time:
+        - Download + transcribe: ~30s
+        - Visual analysis: ~15s
+        - Comment analysis: ~10s
+        - Claude report (fixed): ~20s
+    """
+    per_video_sec = 30  # download + transcribe
+    if visual:
+        per_video_sec += 15
+    if comments:
+        per_video_sec += 10
+    total_sec = video_count * per_video_sec + 20  # + report generation
+    return max(1, round(total_sec / 60))
 
 
 def _get_auto_select_indices(videos):
@@ -317,6 +375,10 @@ def _run_analysis_with_selection(username, mode):
     enable_comments = st.session_state.get("opt_comments", False)
     enable_competitor = st.session_state.get("opt_competitor", False)
 
+    # Language for Whisper transcription
+    lang_label = st.session_state.get("whisper_language", "日本語")
+    whisper_lang = WHISPER_LANGUAGES.get(lang_label, "ja")
+
     with st.status("分析を実行中...", expanded=True) as status:
         # Calculate total steps dynamically
         steps_per_video = 1  # transcribe always
@@ -344,7 +406,9 @@ def _run_analysis_with_selection(username, mode):
 
             # Transcription (always run)
             st.write(f"  [{i+1}/{len(selected)}] {title_short} — 文字起こし中...")
-            transcript, error = transcribe_video_url(video["url"], OPENAI_API_KEY)
+            transcript, error = transcribe_video_url(
+                video["url"], OPENAI_API_KEY, language=whisper_lang
+            )
             video_with_transcript = dict(video)
             if transcript:
                 video_with_transcript["transcript"] = transcript

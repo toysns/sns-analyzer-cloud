@@ -101,8 +101,14 @@ def _extract_audio(video_path, audio_path):
         return False, "ffmpegがインストールされていません"
 
 
-def _transcribe_audio_openai(audio_path, api_key):
+def _transcribe_audio_openai(audio_path, api_key, language="ja"):
     """Transcribe audio using OpenAI Whisper API.
+
+    Args:
+        audio_path: Path to the audio file.
+        api_key: OpenAI API key.
+        language: Language code for Whisper (e.g. "ja", "en", "ko", "zh").
+            Use None or "auto" for auto-detection.
 
     Returns:
         Tuple of (transcript: str | None, error: str | None).
@@ -117,12 +123,15 @@ def _transcribe_audio_openai(audio_path, api_key):
     try:
         client = OpenAI(api_key=api_key)
         with open(audio_path, "rb") as audio_file:
-            response = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="ja",
-                response_format="text",
-            )
+            whisper_kwargs = {
+                "model": "whisper-1",
+                "file": audio_file,
+                "response_format": "text",
+            }
+            # Pass language only if explicitly specified (not auto)
+            if language and language != "auto":
+                whisper_kwargs["language"] = language
+            response = client.audio.transcriptions.create(**whisper_kwargs)
 
         transcript = response.strip() if isinstance(response, str) else str(response).strip()
         if not transcript:
@@ -138,13 +147,14 @@ def _transcribe_audio_openai(audio_path, api_key):
         return None, f"文字起こしエラー: {error_msg[:200]}"
 
 
-def transcribe_video_url(url, openai_api_key, temp_dir=None):
+def transcribe_video_url(url, openai_api_key, temp_dir=None, language="ja"):
     """Full transcription pipeline: download → extract audio → transcribe.
 
     Args:
         url: Video URL (TikTok or Instagram).
         openai_api_key: OpenAI API key.
         temp_dir: Directory for temporary files. Defaults to system temp.
+        language: Language code for Whisper ("ja", "en", "ko", "zh", "auto").
 
     Returns:
         Tuple of (transcript: str | None, error: str | None).
@@ -169,7 +179,7 @@ def transcribe_video_url(url, openai_api_key, temp_dir=None):
             return None, error
 
         # Step 3: Transcribe via OpenAI API
-        transcript, error = _transcribe_audio_openai(audio_path, openai_api_key)
+        transcript, error = _transcribe_audio_openai(audio_path, openai_api_key, language)
         return transcript, error
 
     finally:

@@ -39,10 +39,14 @@ TikTok/Instagram動画から等間隔で抽出した{num_frames}枚のキーフ�
 - 画面分割、ズーム、スローモーション等の演出
 - Before/After的な構成の有無
 
-## 5. サムネイル力（1枚目のフレーム）
-- スクロール停止力（thumb-stopping power）の評価
-- 視覚的なフック要素（目を引く要素）
-- 改善ポイント
+## 5. サムネイル力・冒頭フック分析（1枚目のフレーム = 動画の0秒地点）
+**最重要セクション**: TikTokでは最初の0.5秒でスクロールを止められるかが全てを決める。
+1枚目のフレームを特に詳細に分析し、以下を必ず含めること：
+- スクロール停止力（thumb-stopping power）の10段階評価と理由
+- 視覚的なフック要素（目を引く色、表情、テキスト、構図、意外性）
+- 情報設計: 0.3秒で「何の動画か」が伝わるか？
+- 感情トリガー: 好奇心・共感・驚き・恐怖のどれを狙っているか
+- 改善提案: 具体的に何を変えればスクロール停止率が上がるか（3つ以上）
 
 ## 6. 競合との差別化要素
 - このビジュアルスタイルのユニークさ
@@ -105,14 +109,22 @@ def _extract_keyframes(video_path, output_dir, num_frames=5):
             pass
         return [], "フレーム抽出に失敗しました"
 
-    # Calculate timestamps (avoid very start/end to skip intros/outros)
-    start_offset = min(0.5, duration * 0.05)
-    end_offset = max(duration - 0.5, duration * 0.95)
+    # Calculate timestamps:
+    #   Frame 0: t=0.1s (thumbnail / first impression)
+    #   Frame 1..N: evenly spaced from 10% to 90% of duration
+    thumbnail_ts = min(0.1, duration * 0.01)  # Very start for thumbnail
     if num_frames == 1:
-        timestamps = [duration / 2]
+        timestamps = [thumbnail_ts]
     else:
-        step = (end_offset - start_offset) / (num_frames - 1)
-        timestamps = [start_offset + step * i for i in range(num_frames)]
+        body_start = duration * 0.10
+        body_end = duration * 0.90
+        body_count = num_frames - 1
+        if body_count == 1:
+            body_timestamps = [(body_start + body_end) / 2]
+        else:
+            step = (body_end - body_start) / (body_count - 1)
+            body_timestamps = [body_start + step * i for i in range(body_count)]
+        timestamps = [thumbnail_ts] + body_timestamps
 
     frame_paths = []
     for i, ts in enumerate(timestamps):
@@ -203,12 +215,17 @@ def _analyze_frames_with_vision(frame_paths, openai_api_key):
 def _get_position_label(index, total):
     """Get a descriptive label for frame position."""
     if total == 1:
-        return "中盤"
+        return "サムネイル / 冒頭"
     if index == 0:
-        return "冒頭"
+        return "サムネイル / 冒頭0秒"
     if index == total - 1:
         return "終盤"
-    ratio = index / (total - 1)
+    # Remaining frames are spread across the body
+    body_index = index - 1
+    body_total = total - 2  # Exclude first and last
+    if body_total <= 0:
+        return "中盤"
+    ratio = body_index / body_total if body_total > 0 else 0.5
     if ratio <= 0.3:
         return "序盤"
     if ratio <= 0.6:

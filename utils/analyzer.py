@@ -1,5 +1,6 @@
 """SNS account analysis engine using Anthropic Claude Sonnet with SKILL.md framework."""
 
+import functools
 import logging
 import os
 from pathlib import Path
@@ -63,8 +64,9 @@ STEP 6の改善提案を特に充実させ、以下を必ず含めてくださ�
 }
 
 
+@functools.lru_cache(maxsize=1)
 def _load_skill_files():
-    """Load SKILL.md and all reference files.
+    """Load SKILL.md and all reference files (cached at module level).
 
     Returns:
         str: Combined content of all skill files.
@@ -117,7 +119,8 @@ def _build_system_prompt(mode):
 - コメント分析データがある場合は、オーディエンスの質・感情・マネタイズ可能性の評価に活用すること
 - 時系列トレンドデータがある場合は、成長トレンド・投稿頻度・曜日別パフォーマンス・バイラル傾向の分析に活用すること
 - 競合比較データがある場合は、差別化ポイント・優位性・劣位性を具体的に分析し、ポジショニング提案を行うこと
-- 各ステップの分析を省略せず、十分な深さと具体性を持って記述すること"""
+- 各ステップの分析を省略せず、十分な深さと具体性を持って記述すること
+- 【投稿横断パターン分析】複数の投稿データがある場合は、必ず「伸びている投稿の共通パターン」と「伸びていない投稿の共通パターン」を比較・対比して抽出すること。共通する要素（テーマ、構成、フック、長さ、テロップ、心理トリガー等）を具体的に列挙し、「このアカウントで再現性の高い勝ちパターン」と「避けるべきパターン」を言語化すること"""
 
 
 def _build_user_prompt(account_data, transcripts):
@@ -146,11 +149,27 @@ def _build_user_prompt(account_data, transcripts):
         parts.append(f"- 外部リンク: {account_data['external_link']}")
     parts.append("")
 
-    # Video data with transcripts
+    # Video data with transcripts (sorted by views desc for cross-post comparison)
     if transcripts:
+        sorted_transcripts = sorted(
+            transcripts,
+            key=lambda x: x.get("view_count", 0) or 0,
+            reverse=True,
+        )
         parts.append("## 投稿データ（再生数順）\n")
-        for i, t in enumerate(transcripts, 1):
-            parts.append(f"### 投稿{i}: {t.get('title', '無題')}")
+        total = len(sorted_transcripts)
+        for i, t in enumerate(sorted_transcripts, 1):
+            # Label top/bottom posts for easier cross-post pattern detection
+            if total >= 4:
+                if i <= max(1, total // 3):
+                    rank_label = " 🔥上位"
+                elif i > total - max(1, total // 3):
+                    rank_label = " ⬇下位"
+                else:
+                    rank_label = " ➡中位"
+            else:
+                rank_label = ""
+            parts.append(f"### 投稿{i}{rank_label}: {t.get('title', '無題')}")
             if t.get("view_count"):
                 parts.append(f"- 再生回数: {t['view_count']:,}")
             if t.get("like_count"):
