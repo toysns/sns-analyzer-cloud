@@ -227,8 +227,33 @@ def _render_video_selector(username, mode):
 
     st.divider()
 
-    # Competitor accounts (optional)
-    with st.expander("🔍 競合アカウントを追加（任意）", expanded=False):
+    # --- Optional analysis toggles ---
+    st.markdown("**追加分析オプション**（選択した項目が分析レポートに含まれます）")
+    opt_col1, opt_col2, opt_col3 = st.columns(3)
+    with opt_col1:
+        enable_visual = st.checkbox(
+            "🎬 映像分析",
+            key="opt_visual",
+            value=False,
+            help="動画からキーフレームを抽出し、撮影スタイル・テロップ・構図などを分析します（+約$0.02/本）",
+        )
+    with opt_col2:
+        enable_comments = st.checkbox(
+            "💬 コメント分析",
+            key="opt_comments",
+            value=False,
+            help="コメント欄の感情分析・オーディエンス品質・マネタイズ可能性を評価します（+約$0.005/本）",
+        )
+    with opt_col3:
+        enable_competitor = st.checkbox(
+            "🔍 競合比較",
+            key="opt_competitor",
+            value=False,
+            help="競合アカウントのメタデータを取得して比較分析を行います",
+        )
+
+    # Competitor accounts input (shown only when toggled on)
+    if enable_competitor:
         st.caption("競合アカウントのURLを入力すると、メタデータを取得して比較分析を行います")
         competitor_input = st.text_area(
             "競合アカウントURL（1行1アカウント、最大3つ）",
@@ -287,18 +312,37 @@ def _run_analysis_with_selection(username, mode):
         st.error("動画が選択されていません。")
         return
 
+    # Read optional analysis toggles
+    enable_visual = st.session_state.get("opt_visual", False)
+    enable_comments = st.session_state.get("opt_comments", False)
+    enable_competitor = st.session_state.get("opt_competitor", False)
+
     with st.status("分析を実行中...", expanded=True) as status:
-        total_steps = len(selected) * 3  # transcribe + visual + comments per video
+        # Calculate total steps dynamically
+        steps_per_video = 1  # transcribe always
+        if enable_visual:
+            steps_per_video += 1
+        if enable_comments:
+            steps_per_video += 1
+        total_steps = len(selected) * steps_per_video
         current_step = 0
 
-        # Step 1: Transcribe + Visual + Comment analysis per video
-        st.write(f"Step 1/3: {len(selected)}本の動画を文字起こし＋映像分析＋コメント分析中...")
+        # Build step description
+        step_parts = ["文字起こし"]
+        if enable_visual:
+            step_parts.append("映像分析")
+        if enable_comments:
+            step_parts.append("コメント分析")
+        step_desc = "＋".join(step_parts)
+
+        # Step 1: Transcribe + optional Visual + optional Comment analysis per video
+        st.write(f"Step 1: {len(selected)}本の動画を{step_desc}中...")
         transcripts = []
         progress_bar = st.progress(0)
         for i, video in enumerate(selected):
             title_short = video['title'][:30] if video.get('title') else '無題'
 
-            # Transcription
+            # Transcription (always run)
             st.write(f"  [{i+1}/{len(selected)}] {title_short} — 文字起こし中...")
             transcript, error = transcribe_video_url(video["url"], OPENAI_API_KEY)
             video_with_transcript = dict(video)
@@ -310,61 +354,61 @@ def _run_analysis_with_selection(username, mode):
             current_step += 1
             progress_bar.progress(current_step / total_steps)
 
-            # Visual analysis
-            st.write(f"  [{i+1}/{len(selected)}] {title_short} — 映像分析中...")
-            visual_analysis, vis_error = analyze_video_visuals(
-                video["url"], OPENAI_API_KEY, num_frames=5
-            )
-            if visual_analysis:
-                video_with_transcript["visual_analysis"] = visual_analysis
-            else:
-                video_with_transcript["visual_analysis"] = f"(映像分析失敗: {vis_error})"
-                st.write(f"    ⚠ 映像分析: {vis_error}")
-            current_step += 1
-            progress_bar.progress(current_step / total_steps)
+            # Visual analysis (optional)
+            if enable_visual:
+                st.write(f"  [{i+1}/{len(selected)}] {title_short} — 映像分析中...")
+                visual_analysis, vis_error = analyze_video_visuals(
+                    video["url"], OPENAI_API_KEY, num_frames=5
+                )
+                if visual_analysis:
+                    video_with_transcript["visual_analysis"] = visual_analysis
+                else:
+                    video_with_transcript["visual_analysis"] = f"(映像分析失敗: {vis_error})"
+                    st.write(f"    ⚠ 映像分析: {vis_error}")
+                current_step += 1
+                progress_bar.progress(current_step / total_steps)
 
-            # Comment analysis
-            st.write(f"  [{i+1}/{len(selected)}] {title_short} — コメント分析中...")
-            comment_text, comment_data, cmt_error = fetch_and_analyze_comments(
-                video["url"], OPENAI_API_KEY, max_comments=50
-            )
-            if comment_text:
-                video_with_transcript["comment_analysis"] = comment_text
-            elif cmt_error:
-                video_with_transcript["comment_analysis"] = f"(コメント分析失敗: {cmt_error})"
-                st.write(f"    ⚠ コメント: {cmt_error}")
-            else:
-                video_with_transcript["comment_analysis"] = "(コメントなし)"
-            current_step += 1
-            progress_bar.progress(current_step / total_steps)
+            # Comment analysis (optional)
+            if enable_comments:
+                st.write(f"  [{i+1}/{len(selected)}] {title_short} — コメント分析中...")
+                comment_text, comment_data, cmt_error = fetch_and_analyze_comments(
+                    video["url"], OPENAI_API_KEY, max_comments=50
+                )
+                if comment_text:
+                    video_with_transcript["comment_analysis"] = comment_text
+                elif cmt_error:
+                    video_with_transcript["comment_analysis"] = f"(コメント分析失敗: {cmt_error})"
+                    st.write(f"    ⚠ コメント: {cmt_error}")
+                else:
+                    video_with_transcript["comment_analysis"] = "(コメントなし)"
+                current_step += 1
+                progress_bar.progress(current_step / total_steps)
 
             transcripts.append(video_with_transcript)
 
         st.session_state["transcription_results"] = transcripts
 
-        # Step 2: Competitor analysis (if provided)
-        competitor_urls_raw = st.session_state.get("competitor_urls", "").strip()
+        # Step 2: Competitor analysis (only if toggled on and URLs provided)
         competitor_text = ""
-        if competitor_urls_raw:
-            comp_urls = [u.strip() for u in competitor_urls_raw.split("\n") if u.strip()][:3]
-            st.write(f"Step 2/4: {len(comp_urls)}つの競合アカウントのデータを取得中...")
-            competitors = fetch_competitor_data(comp_urls)
-            main_stats = build_main_account_stats(videos, profile)
-            competitor_text = format_competitor_comparison(main_stats, competitors)
-            if competitor_text:
-                st.write(f"  → {len([c for c in competitors if 'error' not in c])}アカウントの比較データを取得")
-            step_offset = 1
-        else:
-            step_offset = 0
+        if enable_competitor:
+            competitor_urls_raw = st.session_state.get("competitor_urls", "").strip()
+            if competitor_urls_raw:
+                comp_urls = [u.strip() for u in competitor_urls_raw.split("\n") if u.strip()][:3]
+                st.write(f"競合分析: {len(comp_urls)}つの競合アカウントのデータを取得中...")
+                competitors = fetch_competitor_data(comp_urls)
+                main_stats = build_main_account_stats(videos, profile)
+                competitor_text = format_competitor_comparison(main_stats, competitors)
+                if competitor_text:
+                    st.write(f"  → {len([c for c in competitors if 'error' not in c])}アカウントの比較データを取得")
 
         # Save to Sheets
-        st.write(f"Step {2 + step_offset}/{3 + step_offset}: スプレッドシートに保存中...")
+        st.write("スプレッドシートに保存中...")
         _save_to_sheets(transcripts, username, "tiktok")
 
         # AI Analysis
-        st.write(f"Step {3 + step_offset}/{3 + step_offset}: Claude Sonnetで分析レポートを生成中...")
+        st.write("Claude Sonnetで分析レポートを生成中...")
 
-        # Time-series trend analysis (uses existing metadata, no API call)
+        # Time-series trend analysis (always run - uses existing metadata, no API call)
         trend_data = analyze_trends(videos)
         trend_text = format_trend_analysis(trend_data) if trend_data else ""
 
