@@ -37,15 +37,21 @@ def _download_video(url, output_path):
                 "yt-dlp",
                 "--quiet",
                 "--no-warnings",
+                "--no-check-certificates",
+                "--retries", "3",
+                "--fragment-retries", "3",
+                "-f", "best[ext=mp4]/best",
                 "-o", output_path,
                 url,
             ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
         )
         if result.returncode != 0:
-            return False, f"動画ダウンロード失敗: {result.stderr[:200]}"
+            error_lines = [l.strip() for l in result.stderr.split('\n') if l.strip() and 'ERROR' in l.upper()]
+            error_msg = error_lines[-1][:200] if error_lines else result.stderr[-200:].strip()
+            return False, f"動画ダウンロード失敗: {error_msg}"
         if not os.path.exists(output_path):
             # yt-dlp may add an extension
             for ext in [".mp4", ".webm", ".mkv"]:
@@ -79,6 +85,8 @@ def _extract_audio(video_path, audio_path):
         result = subprocess.run(
             [
                 "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
                 "-i", video_path,
                 "-vn",
                 "-acodec", "libmp3lame",
@@ -91,7 +99,10 @@ def _extract_audio(video_path, audio_path):
             timeout=120,
         )
         if result.returncode != 0:
-            return False, f"音声抽出失敗: {result.stderr[:200]}"
+            # stderrから実際のエラー行だけ抽出
+            error_lines = [l.strip() for l in result.stderr.split('\n') if l.strip()]
+            error_msg = error_lines[-1][:200] if error_lines else "不明なエラー"
+            return False, f"音声抽出失敗: {error_msg}"
         if not os.path.exists(audio_path):
             return False, "音声ファイルが生成されませんでした"
         return True, ""
@@ -128,7 +139,6 @@ def _transcribe_audio_openai(audio_path, api_key, language="ja"):
                 "file": audio_file,
                 "response_format": "text",
             }
-            # Pass language only if explicitly specified (not auto)
             if language and language != "auto":
                 whisper_kwargs["language"] = language
             response = client.audio.transcriptions.create(**whisper_kwargs)
