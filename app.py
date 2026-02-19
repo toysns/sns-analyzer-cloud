@@ -516,6 +516,32 @@ def _show_analysis_results(username, mode):
                 st.text(t.get("transcript", "")[:500])
                 st.divider()
 
+    # Visual analysis results
+    if st.session_state.get("transcription_results"):
+        visual_results = [t for t in st.session_state["transcription_results"] if t.get("visual_analysis")]
+        if visual_results:
+            with st.expander(f"🎬 映像分析結果（{len(visual_results)}本）", expanded=False):
+                for t in visual_results:
+                    st.markdown(f"### {t.get('title', '無題')[:50]}")
+                    if t["visual_analysis"].startswith("(映像分析失敗"):
+                        st.warning(t["visual_analysis"])
+                    else:
+                        st.markdown(t["visual_analysis"])
+                    st.divider()
+
+    # Comment analysis results
+    if st.session_state.get("transcription_results"):
+        comment_results = [t for t in st.session_state["transcription_results"] if t.get("comment_analysis")]
+        if comment_results:
+            with st.expander(f"💬 コメント分析結果（{len(comment_results)}本）", expanded=False):
+                for t in comment_results:
+                    st.markdown(f"### {t.get('title', '無題')[:50]}")
+                    if t["comment_analysis"].startswith("(コメント分析失敗"):
+                        st.warning(t["comment_analysis"])
+                    else:
+                        st.markdown(t["comment_analysis"])
+                    st.divider()
+
     # Analysis report
     if st.session_state.get("analysis_report"):
         st.subheader("分析レポート")
