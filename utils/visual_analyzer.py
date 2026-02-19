@@ -56,6 +56,32 @@ TikTok/Instagram動画から等間隔で抽出した{num_frames}枚のキーフ�
 各項目を具体的に記述してください。曖昧な表現は避け、「〇〇というフォントで左上に配置」のように具体的に書いてください。"""
 
 
+def _determine_frame_count(duration):
+    """Determine optimal number of keyframes based on video duration.
+
+    Strategy:
+        ~15s:  5 frames (short TikTok)
+        ~30s:  8 frames
+        ~60s: 12 frames
+        ~90s: 15 frames
+        2m+:  20 frames (cap — GPT-4o Vision limit consideration)
+
+    Returns:
+        int: Number of frames to extract.
+    """
+    if duration is None or duration <= 0:
+        return 5
+    if duration <= 15:
+        return 5
+    if duration <= 30:
+        return 8
+    if duration <= 60:
+        return 12
+    if duration <= 90:
+        return 15
+    return 20  # Cap at 20 to keep Vision API costs reasonable
+
+
 def _get_video_duration(video_path):
     """Get video duration in seconds using ffprobe."""
     try:
@@ -96,7 +122,8 @@ def _extract_keyframes(video_path, output_dir, num_frames=5):
         try:
             result = subprocess.run(
                 [
-                    "ffmpeg", "-i", video_path,
+                    "ffmpeg", "-hide_banner", "-loglevel", "error",
+                    "-i", video_path,
                     "-vframes", "1",
                     "-q:v", "2",
                     "-y", frame_path,
@@ -133,6 +160,7 @@ def _extract_keyframes(video_path, output_dir, num_frames=5):
             result = subprocess.run(
                 [
                     "ffmpeg",
+                    "-hide_banner", "-loglevel", "error",
                     "-ss", f"{ts:.2f}",
                     "-i", video_path,
                     "-vframes", "1",
@@ -303,12 +331,17 @@ def analyze_video_visuals(url, openai_api_key, num_frames=5, temp_dir=None):
         if not success:
             return None, error
 
-        # Step 2: Extract keyframes
-        frame_paths, error = _extract_keyframes(video_path, frames_dir, num_frames)
+        # Step 2: Determine frame count based on duration
+        duration = _get_video_duration(video_path)
+        actual_frames = _determine_frame_count(duration) if num_frames == 5 else num_frames
+        logger.info(f"Video duration: {duration:.1f}s → extracting {actual_frames} frames")
+
+        # Step 3: Extract keyframes
+        frame_paths, error = _extract_keyframes(video_path, frames_dir, actual_frames)
         if error:
             return None, error
 
-        # Step 3: Analyze with Vision API
+        # Step 4: Analyze with Vision API
         analysis, error = _analyze_frames_with_vision(frame_paths, openai_api_key)
         return analysis, error
 
