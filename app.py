@@ -8,11 +8,17 @@ import streamlit as st
 
 from utils.session import init_session_state, clear_analysis_state
 from utils.tiktok_fetcher import (
-    extract_username,
+    extract_username as extract_tiktok_username,
     fetch_tiktok_profile,
     fetch_tiktok_videos,
-    videos_to_dataframe,
+    videos_to_dataframe as tiktok_videos_to_dataframe,
     sample_videos_for_analysis,
+)
+from utils.instagram_fetcher import (
+    extract_instagram_username,
+    fetch_instagram_profile,
+    fetch_instagram_videos,
+    videos_to_dataframe as instagram_videos_to_dataframe,
 )
 from utils.transcriber import transcribe_video_url
 from utils.sheets import get_sheets_client, save_videos_to_sheet
@@ -84,14 +90,14 @@ SORT_OPTIONS = {
 def render_auto_analysis_tab():
     """Render the main auto-analysis tab."""
     st.header("自動分析")
-    st.caption("TikTokアカウントURLを入力 → 動画一覧から分析対象を選択 → 文字起こし+分析レポート生成")
+    st.caption("TikTok/InstagramアカウントURLを入力 → 動画一覧から分析対象を選択 → 文字起こし+分析レポート生成")
 
     # --- Step 1: URL Input ---
     col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         url_input = st.text_input(
             "アカウントURL またはユーザー名",
-            placeholder="https://www.tiktok.com/@username または @username",
+            placeholder="https://www.tiktok.com/@username または https://www.instagram.com/username/",
             key="url_input",
         )
     with col2:
@@ -111,29 +117,34 @@ def render_auto_analysis_tab():
         )
 
     if not url_input:
-        st.info("TikTokのアカウントURL（例: https://www.tiktok.com/@username）を入力してください。")
+        st.info("アカウントURLを入力してください（TikTok: https://www.tiktok.com/@username / Instagram: https://www.instagram.com/username/）")
         return
 
     # Detect platform
     platform = _detect_platform(url_input)
-    if platform == "instagram":
-        st.warning("Instagramアカウントが検出されました。「手動分析」タブでInstagram分析ができます。")
-        return
-    if platform is None and not url_input.startswith("@") and "/" not in url_input:
+    if platform is None:
+        # Default to TikTok for bare usernames
         platform = "tiktok"
 
-    username = extract_username(url_input)
+    # Extract username based on platform
+    if platform == "instagram":
+        username = extract_instagram_username(url_input)
+    else:
+        username = extract_tiktok_username(url_input)
+
     if not username:
         st.error("ユーザー名を取得できませんでした。URLを確認してください。")
         return
 
+    platform_label = "Instagram" if platform == "instagram" else "TikTok"
     st.session_state["account_name"] = username
-    st.session_state["platform"] = "TikTok"
+    st.session_state["platform"] = platform_label
 
     # --- Phase 1: Fetch metadata ---
     if st.session_state.get("tiktok_videos") is None:
+        st.caption(f"検出プラットフォーム: **{platform_label}** / ユーザー: **@{username}**")
         if st.button("動画を取得", type="primary", key="fetch_videos"):
-            _fetch_metadata(username)
+            _fetch_metadata(username, platform)
         return
 
     # --- Phase 2: Video selection ---
@@ -145,25 +156,34 @@ def render_auto_analysis_tab():
     _show_analysis_results(username, mode)
 
 
-def _fetch_metadata(username):
-    """Fetch TikTok account metadata."""
-    with st.status("メタデータを取得中...", expanded=True) as status:
+def _fetch_metadata(username, platform="tiktok"):
+    """Fetch account metadata for TikTok or Instagram."""
+    platform_label = "Instagram" if platform == "instagram" else "TikTok"
+
+    with st.status(f"{platform_label}のメタデータを取得中...", expanded=True) as status:
         st.write("アカウント情報を取得中...")
-        profile = fetch_tiktok_profile(username)
-        videos = fetch_tiktok_videos(username)
+
+        if platform == "instagram":
+            profile = fetch_instagram_profile(username)
+            videos = fetch_instagram_videos(username)
+            to_df = instagram_videos_to_dataframe
+        else:
+            profile = fetch_tiktok_profile(username)
+            videos = fetch_tiktok_videos(username)
+            to_df = tiktok_videos_to_dataframe
 
         if videos is None:
             status.update(label="メタデータ取得に失敗しました", state="error")
             st.error(
-                "TikTokのメタデータ取得に失敗しました。"
-                "TikTokのアクセス制限の可能性があります。"
+                f"{platform_label}のメタデータ取得に失敗しました。"
+                f"{platform_label}のアクセス制限の可能性があります。"
                 "「手動分析」タブでデータを手動入力して分析できます。"
             )
             return
 
         st.session_state["tiktok_profile"] = profile
         st.session_state["tiktok_videos"] = videos
-        st.session_state["tiktok_df"] = videos_to_dataframe(videos)
+        st.session_state["tiktok_df"] = to_df(videos)
 
         msg = f"{len(videos)}本の動画を取得しました"
         if profile:
@@ -515,8 +535,10 @@ def _run_analysis_with_selection(username, mode):
                     st.write(f"  → {len([c for c in competitors if 'error' not in c])}アカウントの比較データを取得")
 
         # Save to Sheets
+        platform_label = st.session_state.get("platform", "TikTok")
+        platform_prefix = "instagram" if platform_label == "Instagram" else "tiktok"
         st.write("スプレッドシートに保存中...")
-        _save_to_sheets(transcripts, username, "tiktok")
+        _save_to_sheets(transcripts, username, platform_prefix)
 
         # AI Analysis
         st.write("Claude Sonnetで分析レポートを生成中...")
@@ -526,7 +548,7 @@ def _run_analysis_with_selection(username, mode):
         trend_text = format_trend_analysis(trend_data) if trend_data else ""
 
         account_data = {
-            "platform": "TikTok",
+            "platform": platform_label,
             "name": username,
             "followers": profile.get("followers", "不明") if profile else "不明",
             "total_posts": len(videos),
@@ -597,14 +619,16 @@ def _show_analysis_results(username, mode):
         st.markdown(st.session_state["analysis_report"])
 
         # Download button
+        platform_label = st.session_state.get("platform", "TikTok")
+        platform_prefix = "instagram" if platform_label == "Instagram" else "tiktok"
         mode_name = ANALYSIS_MODES.get(mode, ("不明",))[0]
         report_text = export_report_text(
             st.session_state["analysis_report"],
             username,
-            "TikTok",
+            platform_label,
             mode_name,
         )
-        filename = generate_filename(username, "tiktok")
+        filename = generate_filename(username, platform_prefix)
         st.download_button(
             "レポートをダウンロード",
             data=report_text,
