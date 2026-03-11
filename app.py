@@ -24,6 +24,7 @@ from utils.report import (
 )
 from utils.screenshot_reader import extract_metadata_from_screenshot
 from utils.visual_analyzer import analyze_video_visuals
+from utils.gemini_video_analyzer import analyze_video_with_gemini
 from utils.comment_analyzer import fetch_and_analyze_comments
 from utils.trend_analyzer import analyze_trends, format_trend_analysis
 from utils.competitor_analyzer import (
@@ -44,6 +45,7 @@ init_session_state()
 
 # --- API Key Check ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 
 def _detect_platform(url):
@@ -244,22 +246,36 @@ def _render_video_selector(username, mode):
 
     # --- Optional analysis toggles ---
     st.markdown("**追加分析オプション**（選択した項目が分析レポートに含まれます）")
-    opt_col1, opt_col2, opt_col3 = st.columns(3)
+    opt_col1, opt_col2, opt_col3, opt_col4 = st.columns(4)
     with opt_col1:
+        enable_gemini = st.checkbox(
+            "🎥 Gemini動画分析",
+            key="opt_gemini",
+            value=False,
+            help="Gemini APIで動画を丸ごと分析。文字起こし＋映像分析を統合実行します。ONにすると従来のWhisper文字起こし＋映像分析の代わりに使用されます。",
+            disabled=not GEMINI_API_KEY,
+        )
+        if not GEMINI_API_KEY:
+            st.caption("⚠ GEMINI_API_KEY未設定")
+    with opt_col2:
+        # Disable separate visual analysis when Gemini is on (Gemini includes it)
         enable_visual = st.checkbox(
             "🎬 映像分析",
             key="opt_visual",
             value=False,
             help="動画からキーフレームを抽出し、撮影スタイル・テロップ・構図などを分析します（+約$0.02/本）",
+            disabled=st.session_state.get("opt_gemini", False),
         )
-    with opt_col2:
+        if st.session_state.get("opt_gemini", False):
+            st.caption("Geminiに含まれます")
+    with opt_col3:
         enable_comments = st.checkbox(
             "💬 コメント分析",
             key="opt_comments",
             value=False,
             help="コメント欄の感情分析・オーディエンス品質・マネタイズ可能性を評価します（+約$0.005/本）",
         )
-    with opt_col3:
+    with opt_col4:
         enable_competitor = st.checkbox(
             "🔍 競合比較",
             key="opt_competitor",
@@ -282,8 +298,8 @@ def _render_video_selector(username, mode):
     # Selected count and cost estimate
     st.markdown(f"**{selected_count}本**を選択中")
     if selected_count > 0:
-        cost_estimate = _estimate_cost(selected_count, enable_visual, enable_comments)
-        time_estimate = _estimate_time(selected_count, enable_visual, enable_comments)
+        cost_estimate = _estimate_cost(selected_count, enable_visual, enable_comments, enable_gemini)
+        time_estimate = _estimate_time(selected_count, enable_visual, enable_comments, enable_gemini)
         st.caption(
             f"💰 推定コスト: **${cost_estimate:.2f}** | "
             f"⏱ 推定時間: **約{time_estimate}分**"
@@ -306,36 +322,44 @@ def _render_video_selector(username, mode):
             st.rerun()
 
 
-def _estimate_cost(video_count, visual=False, comments=False):
+def _estimate_cost(video_count, visual=False, comments=False, gemini=False):
     """Estimate API cost for the analysis run.
 
     Approximate per-video costs:
         - Whisper transcription: ~$0.006 (avg 1min audio)
         - GPT-4o Vision (visual): ~$0.02 (5 frames)
         - GPT-4o-mini (comments): ~$0.005
+        - Gemini 2.0 Flash (video): ~$0.01 (replaces Whisper + Vision)
         - Claude Sonnet report (fixed): ~$0.08
     """
-    per_video = 0.006  # Whisper
-    if visual:
-        per_video += 0.02
+    if gemini:
+        per_video = 0.01  # Gemini video analysis (transcription + visual combined)
+    else:
+        per_video = 0.006  # Whisper
+        if visual:
+            per_video += 0.02
     if comments:
         per_video += 0.005
     report_cost = 0.08  # Claude Sonnet
     return video_count * per_video + report_cost
 
 
-def _estimate_time(video_count, visual=False, comments=False):
+def _estimate_time(video_count, visual=False, comments=False, gemini=False):
     """Estimate processing time in minutes.
 
     Approximate per-video time:
         - Download + transcribe: ~30s
         - Visual analysis: ~15s
         - Comment analysis: ~10s
+        - Gemini video analysis: ~40s (download + upload + analysis)
         - Claude report (fixed): ~20s
     """
-    per_video_sec = 30  # download + transcribe
-    if visual:
-        per_video_sec += 15
+    if gemini:
+        per_video_sec = 40  # download + upload + Gemini analysis
+    else:
+        per_video_sec = 30  # download + transcribe
+        if visual:
+            per_video_sec += 15
     if comments:
         per_video_sec += 10
     total_sec = video_count * per_video_sec + 20  # + report generation
@@ -371,6 +395,7 @@ def _run_analysis_with_selection(username, mode):
         return
 
     # Read optional analysis toggles
+    enable_gemini = st.session_state.get("opt_gemini", False)
     enable_visual = st.session_state.get("opt_visual", False)
     enable_comments = st.session_state.get("opt_comments", False)
     enable_competitor = st.session_state.get("opt_competitor", False)
@@ -381,18 +406,24 @@ def _run_analysis_with_selection(username, mode):
 
     with st.status("分析を実行中...", expanded=True) as status:
         # Calculate total steps dynamically
-        steps_per_video = 1  # transcribe always
-        if enable_visual:
-            steps_per_video += 1
+        if enable_gemini:
+            steps_per_video = 1  # Gemini does transcription + visual in one call
+        else:
+            steps_per_video = 1  # transcribe always
+            if enable_visual:
+                steps_per_video += 1
         if enable_comments:
             steps_per_video += 1
         total_steps = len(selected) * steps_per_video
         current_step = 0
 
         # Build step description
-        step_parts = ["文字起こし"]
-        if enable_visual:
-            step_parts.append("映像分析")
+        if enable_gemini:
+            step_parts = ["Gemini動画分析（文字起こし＋映像分析）"]
+        else:
+            step_parts = ["文字起こし"]
+            if enable_visual:
+                step_parts.append("映像分析")
         if enable_comments:
             step_parts.append("コメント分析")
         step_desc = "＋".join(step_parts)
@@ -403,36 +434,54 @@ def _run_analysis_with_selection(username, mode):
         progress_bar = st.progress(0)
         for i, video in enumerate(selected):
             title_short = video['title'][:30] if video.get('title') else '無題'
-
-            # Transcription (always run)
-            st.write(f"  [{i+1}/{len(selected)}] {title_short} — 文字起こし中...")
-            transcript, error = transcribe_video_url(
-                video["url"], OPENAI_API_KEY, language=whisper_lang
-            )
             video_with_transcript = dict(video)
-            if transcript:
-                video_with_transcript["transcript"] = transcript
-            else:
-                video_with_transcript["transcript"] = f"(文字起こし失敗: {error})"
-                st.write(f"    ⚠ {error}")
-            current_step += 1
-            progress_bar.progress(current_step / total_steps)
 
-            # Visual analysis (optional)
-            if enable_visual:
-                st.write(f"  [{i+1}/{len(selected)}] {title_short} — 映像分析中...")
-                visual_analysis, vis_error = analyze_video_visuals(
-                    video["url"], OPENAI_API_KEY, num_frames=5
+            if enable_gemini:
+                # Gemini unified analysis: transcription + visual in one call
+                st.write(f"  [{i+1}/{len(selected)}] {title_short} — Gemini動画分析中...")
+                transcript, visual_analysis, error = analyze_video_with_gemini(
+                    video["url"], GEMINI_API_KEY
                 )
+                if transcript:
+                    video_with_transcript["transcript"] = transcript
+                else:
+                    video_with_transcript["transcript"] = f"(文字起こし失敗: {error})"
+                    st.write(f"    ⚠ {error}")
                 if visual_analysis:
                     video_with_transcript["visual_analysis"] = visual_analysis
+                elif error:
+                    video_with_transcript["visual_analysis"] = f"(映像分析失敗: {error})"
+                current_step += 1
+                progress_bar.progress(current_step / total_steps)
+            else:
+                # Traditional pipeline: Whisper + optional GPT-4o Vision
+                st.write(f"  [{i+1}/{len(selected)}] {title_short} — 文字起こし中...")
+                transcript, error = transcribe_video_url(
+                    video["url"], OPENAI_API_KEY, language=whisper_lang
+                )
+                if transcript:
+                    video_with_transcript["transcript"] = transcript
                 else:
-                    video_with_transcript["visual_analysis"] = f"(映像分析失敗: {vis_error})"
-                    st.write(f"    ⚠ 映像分析: {vis_error}")
+                    video_with_transcript["transcript"] = f"(文字起こし失敗: {error})"
+                    st.write(f"    ⚠ {error}")
                 current_step += 1
                 progress_bar.progress(current_step / total_steps)
 
-            # Comment analysis (optional)
+                # Visual analysis (optional, GPT-4o Vision)
+                if enable_visual:
+                    st.write(f"  [{i+1}/{len(selected)}] {title_short} — 映像分析中...")
+                    visual_analysis, vis_error = analyze_video_visuals(
+                        video["url"], OPENAI_API_KEY, num_frames=5
+                    )
+                    if visual_analysis:
+                        video_with_transcript["visual_analysis"] = visual_analysis
+                    else:
+                        video_with_transcript["visual_analysis"] = f"(映像分析失敗: {vis_error})"
+                        st.write(f"    ⚠ 映像分析: {vis_error}")
+                    current_step += 1
+                    progress_bar.progress(current_step / total_steps)
+
+            # Comment analysis (optional, works with both Gemini and traditional)
             if enable_comments:
                 st.write(f"  [{i+1}/{len(selected)}] {title_short} — コメント分析中...")
                 comment_text, comment_data, cmt_error = fetch_and_analyze_comments(
@@ -813,9 +862,13 @@ def render_settings_tab():
     else:
         st.error("Anthropic API Key: 未設定 (環境変数 ANTHROPIC_API_KEY を設定してください)")
     if OPENAI_API_KEY:
-        st.success(f"OpenAI API Key: 設定済み (****{OPENAI_API_KEY[-4:]}) — 文字起こし(Whisper)用")
+        st.success(f"OpenAI API Key: 設定済み (****{OPENAI_API_KEY[-4:]}) — 文字起こし(Whisper)/映像分析(GPT-4o)用")
     else:
         st.error("OpenAI API Key: 未設定 (環境変数 OPENAI_API_KEY を設定してください)")
+    if GEMINI_API_KEY:
+        st.success(f"Gemini API Key: 設定済み (****{GEMINI_API_KEY[-4:]}) — Gemini動画分析用")
+    else:
+        st.warning("Gemini API Key: 未設定 (環境変数 GEMINI_API_KEY を設定するとGemini動画分析が使えます)")
 
     # Google Sheets test
     st.subheader("Google Sheets接続")
