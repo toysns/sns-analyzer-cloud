@@ -1,8 +1,8 @@
-"""Instagram metadata fetching via Manus API (primary) with yt-dlp fallback.
+"""Instagram metadata fetching via Apify (primary) with yt-dlp fallback.
 
 Data collection strategy:
-    - Primary: Manus browser agent (reliable for Instagram public profiles)
-    - Fallback: yt-dlp (used when Manus is unavailable or fails)
+    - Primary: Apify Instagram Profile Scraper (~$0.003/query, reliable)
+    - Fallback: yt-dlp (used when Apify is unavailable or fails)
 """
 
 import json
@@ -13,7 +13,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from utils.manus_client import collect_instagram_data, get_manus_api_key
+from utils.apify_client import collect_instagram_data, get_apify_api_token
 
 logger = logging.getLogger(__name__)
 
@@ -231,16 +231,16 @@ def videos_to_dataframe(videos):
 
 
 # =============================================================================
-# Manus-based Instagram collection (primary method)
+# Apify-based Instagram collection (primary method)
 # =============================================================================
 
-def is_manus_available():
-    """Check if Manus API key is configured."""
-    return bool(get_manus_api_key())
+def is_apify_available():
+    """Check if Apify API token is configured."""
+    return bool(get_apify_api_token())
 
 
-def fetch_instagram_via_manus(username, max_count=30, progress_callback=None):
-    """Fetch Instagram profile and videos using Manus browser agent.
+def fetch_instagram_via_apify(username, max_count=30, progress_callback=None):
+    """Fetch Instagram profile and videos using Apify scraper.
 
     Args:
         username: Instagram username (without @).
@@ -250,30 +250,30 @@ def fetch_instagram_via_manus(username, max_count=30, progress_callback=None):
     Returns:
         (profile, videos, error): profile dict, list of video dicts, or error string.
     """
-    api_key = get_manus_api_key()
-    if not api_key:
-        return None, None, "MANUS_API_KEY未設定"
+    api_token = get_apify_api_token()
+    if not api_token:
+        return None, None, "APIFY_API_TOKEN未設定"
 
     profile, videos, error = collect_instagram_data(
         username,
-        api_key=api_key,
+        api_token=api_token,
         max_videos=max_count,
         progress_callback=progress_callback,
     )
 
     if error:
-        logger.warning("Manus collection failed for @%s: %s", username, error)
+        logger.warning("Apify collection failed for @%s: %s", username, error)
         return profile, videos, error
 
     return profile, videos, None
 
 
 def fetch_instagram_auto(username, max_count=30, progress_callback=None):
-    """Auto-fetch Instagram data: Manus first, yt-dlp fallback.
+    """Auto-fetch Instagram data: Apify first, yt-dlp fallback.
 
     This is the unified entry point for Instagram data collection.
-    It tries Manus first (better for Instagram) and falls back to
-    yt-dlp if Manus is unavailable or fails.
+    It tries Apify first (reliable, cheap) and falls back to
+    yt-dlp if Apify is unavailable or fails.
 
     Args:
         username: Instagram username (without @).
@@ -284,27 +284,27 @@ def fetch_instagram_auto(username, max_count=30, progress_callback=None):
         (profile, videos, method, error):
             profile: dict with profile info.
             videos: list of video dicts.
-            method: "manus" or "ytdlp" indicating which method succeeded.
+            method: "apify" or "ytdlp" indicating which method succeeded.
             error: error string if both methods failed.
     """
-    # Try Manus first
-    if is_manus_available():
+    # Try Apify first
+    if is_apify_available():
         if progress_callback:
-            progress_callback("Manus AIでInstagramデータを収集中...")
+            progress_callback("ApifyでInstagramデータを収集中...")
 
-        profile, videos, error = fetch_instagram_via_manus(
+        profile, videos, error = fetch_instagram_via_apify(
             username, max_count, progress_callback
         )
         if videos:
-            logger.info("Manus collection succeeded for @%s: %d videos", username, len(videos))
-            return profile, videos, "manus", None
+            logger.info("Apify collection succeeded for @%s: %d videos", username, len(videos))
+            return profile, videos, "apify", None
 
-        logger.warning("Manus failed for @%s, falling back to yt-dlp: %s", username, error)
+        logger.warning("Apify failed for @%s, falling back to yt-dlp: %s", username, error)
         if progress_callback:
-            progress_callback(f"Manus失敗 ({error})、yt-dlpにフォールバック中...")
+            progress_callback(f"Apify失敗 ({error})、yt-dlpにフォールバック中...")
     else:
         if progress_callback:
-            progress_callback("MANUS_API_KEY未設定のため、yt-dlpで取得中...")
+            progress_callback("APIFY_API_TOKEN未設定のため、yt-dlpで取得中...")
 
     # Fallback to yt-dlp
     if progress_callback:
@@ -316,4 +316,4 @@ def fetch_instagram_auto(username, max_count=30, progress_callback=None):
     if videos:
         return profile, videos, "ytdlp", None
 
-    return profile, None, "ytdlp", "Instagram動画の取得に失敗しました（Manus・yt-dlp両方失敗）"
+    return profile, None, "ytdlp", "Instagram動画の取得に失敗しました（Apify・yt-dlp両方失敗）"

@@ -1,6 +1,6 @@
 """URL routing: detect platform and dispatch to the appropriate data collector.
 
-Unified entry point for both Instagram (Manus) and TikTok (yt-dlp) flows.
+Unified entry point for both Instagram (Apify) and TikTok (yt-dlp) flows.
 The user just provides a URL; this module figures out which backend to use.
 """
 
@@ -63,10 +63,10 @@ def _extract_tiktok_username(url_or_username):
     return url_or_username.lstrip("@").strip()
 
 
-def should_use_manus(platform):
-    """Determine if Manus should be used for data collection.
+def should_use_apify(platform):
+    """Determine if Apify should be used for data collection.
 
-    Instagram → Manus (browser agent, more reliable)
+    Instagram → Apify (scraper API, reliable & cheap)
     TikTok → yt-dlp (existing pipeline, works well for TikTok)
     """
     return platform == "instagram"
@@ -75,5 +75,5 @@ def should_use_manus(platform):
 def get_collection_method_label(platform):
     """Get a human-readable label for the collection method being used."""
     if platform == "instagram":
-        return "Manus AI (ブラウザエージェント)"
+        return "Apify (Instagram Scraper)"
     return "yt-dlp (ダイレクト取得)"

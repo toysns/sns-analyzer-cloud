@@ -29,7 +29,7 @@ DEFAULTS = {
     # Sheets
     "sheets_saved": False,
     # Collection method tracking
-    "collection_method": "",  # "manus" or "ytdlp"
+    "collection_method": "",  # "apify" or "ytdlp"
 }
 
 

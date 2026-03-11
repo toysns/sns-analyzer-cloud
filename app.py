@@ -19,7 +19,7 @@ from utils.instagram_fetcher import (
     fetch_instagram_profile,
     fetch_instagram_videos,
     fetch_instagram_auto,
-    is_manus_available,
+    is_apify_available,
     videos_to_dataframe as instagram_videos_to_dataframe,
 )
 from utils.url_router import (
@@ -58,7 +58,7 @@ init_session_state()
 # --- API Key Check ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-MANUS_API_KEY = os.environ.get("MANUS_API_KEY", "")
+APIFY_API_TOKEN = os.environ.get("APIFY_API_TOKEN", "")
 
 
 def _detect_platform(url):
@@ -133,7 +133,7 @@ def render_auto_analysis_tab():
         # Default to TikTok for bare usernames
         platform = "tiktok"
 
-    # --- Unified auto-fetch flow (Instagram: Manus / TikTok: yt-dlp) ---
+    # --- Unified auto-fetch flow (Instagram: Apify / TikTok: yt-dlp) ---
     if platform == "instagram":
         username = extract_instagram_username(url_input)
     else:
@@ -152,14 +152,14 @@ def render_auto_analysis_tab():
         collection_method = get_collection_method_label(platform)
         st.caption(f"検出プラットフォーム: **{platform_label}** / ユーザー: **@{username}** / 収集方法: {collection_method}")
 
-        # Show Manus status for Instagram
+        # Show Apify status for Instagram
         if platform == "instagram":
-            if is_manus_available():
-                st.success("Manus API: 接続可能 — Instagramデータを自動収集します")
+            if is_apify_available():
+                st.success("Apify: 接続可能 — Instagramデータを自動収集します")
             else:
                 st.warning(
-                    "MANUS_API_KEY未設定 — yt-dlpフォールバックで取得を試みます。\n"
-                    "Manus APIを設定するとInstagramデータをより確実に収集できます。"
+                    "APIFY_API_TOKEN未設定 — yt-dlpフォールバックで取得を試みます。\n"
+                    "Apifyを設定するとInstagramデータをより確実に収集できます。"
                 )
 
         if st.button("動画を取得", type="primary", key="fetch_videos"):
@@ -191,7 +191,7 @@ def render_auto_analysis_tab():
 def _fetch_metadata(username, platform="tiktok"):
     """Fetch account metadata for TikTok or Instagram.
 
-    Instagram uses Manus API (primary) with yt-dlp fallback.
+    Instagram uses Apify (primary) with yt-dlp fallback.
     TikTok uses yt-dlp directly.
     """
     platform_label = "Instagram" if platform == "instagram" else "TikTok"
@@ -200,7 +200,7 @@ def _fetch_metadata(username, platform="tiktok"):
         st.write("アカウント情報を取得中...")
 
         if platform == "instagram":
-            # Unified Instagram fetch: Manus → yt-dlp fallback
+            # Unified Instagram fetch: Apify → yt-dlp fallback
             def _progress(msg):
                 st.write(f"  {msg}")
 
@@ -210,7 +210,7 @@ def _fetch_metadata(username, platform="tiktok"):
             to_df = instagram_videos_to_dataframe
 
             if videos:
-                method_label = "Manus AI" if method == "manus" else "yt-dlp"
+                method_label = "Apify" if method == "apify" else "yt-dlp"
                 st.write(f"  ✓ {method_label}で取得成功")
                 st.session_state["collection_method"] = method
         else:
@@ -992,10 +992,10 @@ def render_settings_tab():
         st.success(f"Gemini API Key: 設定済み (****{GEMINI_API_KEY[-4:]}) — Gemini動画分析用")
     else:
         st.warning("Gemini API Key: 未設定 (環境変数 GEMINI_API_KEY を設定するとGemini動画分析が使えます)")
-    if MANUS_API_KEY:
-        st.success(f"Manus API Key: 設定済み (****{MANUS_API_KEY[-4:]}) — Instagram自動収集用")
+    if APIFY_API_TOKEN:
+        st.success(f"Apify API Token: 設定済み (****{APIFY_API_TOKEN[-4:]}) — Instagram自動収集用")
     else:
-        st.warning("Manus API Key: 未設定 (環境変数 MANUS_API_KEY を設定するとInstagramの自動データ収集が使えます)")
+        st.warning("Apify API Token: 未設定 (環境変数 APIFY_API_TOKEN を設定するとInstagramの自動データ収集が使えます)")
 
     # Google Sheets test
     st.subheader("Google Sheets接続")
@@ -1042,7 +1042,7 @@ def render_settings_tab():
 # ==============================================================================
 
 st.title("📊 SNS Analyzer")
-st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します（Instagram: Manus AI / TikTok: yt-dlp）")
+st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します（Instagram: Apify / TikTok: yt-dlp）")
 
 tab1, tab2, tab3 = st.tabs(["自動分析", "手動分析", "設定"])
 
