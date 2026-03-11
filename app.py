@@ -56,9 +56,19 @@ st.set_page_config(
 init_session_state()
 
 # --- API Key Check ---
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-APIFY_API_TOKEN = os.environ.get("APIFY_API_TOKEN", "")
+def _get_secret(key, default=""):
+    """Get secret from environment or st.secrets."""
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+OPENAI_API_KEY = _get_secret("OPENAI_API_KEY")
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY")
+APIFY_API_TOKEN = _get_secret("APIFY_API_TOKEN")
 
 
 def _detect_platform(url):

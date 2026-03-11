@@ -24,8 +24,15 @@ SYNC_TIMEOUT = 290
 
 
 def get_apify_api_token():
-    """Get Apify API token from environment."""
-    return os.environ.get("APIFY_API_TOKEN", "")
+    """Get Apify API token from environment or st.secrets."""
+    val = os.environ.get("APIFY_API_TOKEN", "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get("APIFY_API_TOKEN", "")
+    except Exception:
+        return ""
 
 
 def collect_instagram_data(username, api_token=None, max_videos=30,
