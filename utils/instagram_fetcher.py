@@ -1,4 +1,9 @@
-"""Instagram metadata fetching via yt-dlp."""
+"""Instagram metadata fetching via Manus API (primary) with yt-dlp fallback.
+
+Data collection strategy:
+    - Primary: Manus browser agent (reliable for Instagram public profiles)
+    - Fallback: yt-dlp (used when Manus is unavailable or fails)
+"""
 
 import json
 import logging
@@ -7,6 +12,8 @@ import subprocess
 from datetime import datetime
 
 import pandas as pd
+
+from utils.manus_client import collect_instagram_data, get_manus_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -221,3 +228,92 @@ def videos_to_dataframe(videos):
             "URL": v["url"],
         })
     return pd.DataFrame(rows)
+
+
+# =============================================================================
+# Manus-based Instagram collection (primary method)
+# =============================================================================
+
+def is_manus_available():
+    """Check if Manus API key is configured."""
+    return bool(get_manus_api_key())
+
+
+def fetch_instagram_via_manus(username, max_count=30, progress_callback=None):
+    """Fetch Instagram profile and videos using Manus browser agent.
+
+    Args:
+        username: Instagram username (without @).
+        max_count: Max number of videos to collect.
+        progress_callback: Optional callable(str) for status updates.
+
+    Returns:
+        (profile, videos, error): profile dict, list of video dicts, or error string.
+    """
+    api_key = get_manus_api_key()
+    if not api_key:
+        return None, None, "MANUS_API_KEY未設定"
+
+    profile, videos, error = collect_instagram_data(
+        username,
+        api_key=api_key,
+        max_videos=max_count,
+        progress_callback=progress_callback,
+    )
+
+    if error:
+        logger.warning("Manus collection failed for @%s: %s", username, error)
+        return profile, videos, error
+
+    return profile, videos, None
+
+
+def fetch_instagram_auto(username, max_count=30, progress_callback=None):
+    """Auto-fetch Instagram data: Manus first, yt-dlp fallback.
+
+    This is the unified entry point for Instagram data collection.
+    It tries Manus first (better for Instagram) and falls back to
+    yt-dlp if Manus is unavailable or fails.
+
+    Args:
+        username: Instagram username (without @).
+        max_count: Max number of videos to collect.
+        progress_callback: Optional callable(str) for status updates.
+
+    Returns:
+        (profile, videos, method, error):
+            profile: dict with profile info.
+            videos: list of video dicts.
+            method: "manus" or "ytdlp" indicating which method succeeded.
+            error: error string if both methods failed.
+    """
+    # Try Manus first
+    if is_manus_available():
+        if progress_callback:
+            progress_callback("Manus AIでInstagramデータを収集中...")
+
+        profile, videos, error = fetch_instagram_via_manus(
+            username, max_count, progress_callback
+        )
+        if videos:
+            logger.info("Manus collection succeeded for @%s: %d videos", username, len(videos))
+            return profile, videos, "manus", None
+
+        logger.warning("Manus failed for @%s, falling back to yt-dlp: %s", username, error)
+        if progress_callback:
+            progress_callback(f"Manus失敗 ({error})、yt-dlpにフォールバック中...")
+    else:
+        if progress_callback:
+            progress_callback("MANUS_API_KEY未設定のため、yt-dlpで取得中...")
+
+    # Fallback to yt-dlp
+    if progress_callback:
+        progress_callback("yt-dlpでInstagramデータを取得中...")
+
+    profile = fetch_instagram_profile(username)
+    videos = fetch_instagram_videos(username, max_count)
+
+    if videos:
+        return profile, videos, "ytdlp", None
+
+    return profile, None, "ytdlp", "Instagram動画の取得に失敗しました（Manus・yt-dlp両方失敗）"

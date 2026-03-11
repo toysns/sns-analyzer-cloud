@@ -28,6 +28,8 @@ DEFAULTS = {
     "screenshot_metadata": None,
     # Sheets
     "sheets_saved": False,
+    # Collection method tracking
+    "collection_method": "",  # "manus" or "ytdlp"
 }
 
 
@@ -53,6 +55,7 @@ def clear_analysis_state():
         "instagram_profile_manual",
         "instagram_urls",
         "sheets_saved",
+        "collection_method",
     ]
     for key in keys_to_reset:
         st.session_state[key] = DEFAULTS.get(key)

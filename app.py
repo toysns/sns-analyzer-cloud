@@ -18,7 +18,13 @@ from utils.instagram_fetcher import (
     extract_instagram_username,
     fetch_instagram_profile,
     fetch_instagram_videos,
+    fetch_instagram_auto,
+    is_manus_available,
     videos_to_dataframe as instagram_videos_to_dataframe,
+)
+from utils.url_router import (
+    detect_platform as route_detect_platform,
+    get_collection_method_label,
 )
 from utils.transcriber import transcribe_video_url
 from utils.sheets import get_sheets_client, save_videos_to_sheet
@@ -52,6 +58,7 @@ init_session_state()
 # --- API Key Check ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+MANUS_API_KEY = os.environ.get("MANUS_API_KEY", "")
 
 
 def _detect_platform(url):
@@ -126,56 +133,50 @@ def render_auto_analysis_tab():
         # Default to TikTok for bare usernames
         platform = "tiktok"
 
-    # --- Instagram: Reel URLs input flow ---
+    # --- Unified auto-fetch flow (Instagram: Manus / TikTok: yt-dlp) ---
     if platform == "instagram":
         username = extract_instagram_username(url_input)
-        if not username:
-            st.error("ユーザー名を取得できませんでした。URLを確認してください。")
-            return
+    else:
+        username = extract_tiktok_username(url_input)
 
-        st.session_state["account_name"] = username
-        st.session_state["platform"] = "Instagram"
-
-        # Phase 1: Input Reel URLs
-        if st.session_state.get("tiktok_videos") is None:
-            st.caption(f"検出プラットフォーム: **Instagram** / ユーザー: **@{username}**")
-            st.info(
-                "Instagramはアカウントからの自動取得ができないため、分析したいReelのURLを下に貼り付けてください。\n\n"
-                "ReelのURL例: `https://www.instagram.com/reel/ABC123/`"
-            )
-            reel_urls_input = st.text_area(
-                "Reel URLを1行に1つずつ貼り付け",
-                placeholder="https://www.instagram.com/reel/ABC123/\nhttps://www.instagram.com/reel/DEF456/\nhttps://www.instagram.com/reel/GHI789/",
-                height=150,
-                key="instagram_reel_urls",
-            )
-            if st.button("この動画を分析対象にする", type="primary", key="fetch_ig_reels"):
-                _build_instagram_video_list(username, reel_urls_input)
-            return
-
-        # Phase 2: Video selection
-        if st.session_state.get("analysis_report") is None:
-            _render_video_selector(username, mode)
-            return
-
-        # Phase 3: Show results
-        _show_analysis_results(username, mode)
-        return
-
-    # --- TikTok: auto-fetch flow ---
-    username = extract_tiktok_username(url_input)
     if not username:
         st.error("ユーザー名を取得できませんでした。URLを確認してください。")
         return
 
+    platform_label = "Instagram" if platform == "instagram" else "TikTok"
     st.session_state["account_name"] = username
-    st.session_state["platform"] = "TikTok"
+    st.session_state["platform"] = platform_label
 
     # Phase 1: Fetch metadata
     if st.session_state.get("tiktok_videos") is None:
-        st.caption(f"検出プラットフォーム: **TikTok** / ユーザー: **@{username}**")
+        collection_method = get_collection_method_label(platform)
+        st.caption(f"検出プラットフォーム: **{platform_label}** / ユーザー: **@{username}** / 収集方法: {collection_method}")
+
+        # Show Manus status for Instagram
+        if platform == "instagram":
+            if is_manus_available():
+                st.success("Manus API: 接続可能 — Instagramデータを自動収集します")
+            else:
+                st.warning(
+                    "MANUS_API_KEY未設定 — yt-dlpフォールバックで取得を試みます。\n"
+                    "Manus APIを設定するとInstagramデータをより確実に収集できます。"
+                )
+
         if st.button("動画を取得", type="primary", key="fetch_videos"):
-            _fetch_metadata(username, "tiktok")
+            _fetch_metadata(username, platform)
+
+        # Manual Reel URL fallback for Instagram
+        if platform == "instagram":
+            st.divider()
+            with st.expander("手動でReel URLを入力する（自動取得がうまくいかない場合）"):
+                reel_urls_input = st.text_area(
+                    "Reel URLを1行に1つずつ貼り付け",
+                    placeholder="https://www.instagram.com/reel/ABC123/\nhttps://www.instagram.com/reel/DEF456/",
+                    height=120,
+                    key="instagram_reel_urls",
+                )
+                if st.button("この動画を分析対象にする", key="fetch_ig_reels"):
+                    _build_instagram_video_list(username, reel_urls_input)
         return
 
     # Phase 2: Video selection
@@ -188,28 +189,50 @@ def render_auto_analysis_tab():
 
 
 def _fetch_metadata(username, platform="tiktok"):
-    """Fetch account metadata for TikTok or Instagram."""
+    """Fetch account metadata for TikTok or Instagram.
+
+    Instagram uses Manus API (primary) with yt-dlp fallback.
+    TikTok uses yt-dlp directly.
+    """
     platform_label = "Instagram" if platform == "instagram" else "TikTok"
 
     with st.status(f"{platform_label}のメタデータを取得中...", expanded=True) as status:
         st.write("アカウント情報を取得中...")
 
         if platform == "instagram":
-            profile = fetch_instagram_profile(username)
-            videos = fetch_instagram_videos(username)
+            # Unified Instagram fetch: Manus → yt-dlp fallback
+            def _progress(msg):
+                st.write(f"  {msg}")
+
+            profile, videos, method, error = fetch_instagram_auto(
+                username, max_count=30, progress_callback=_progress
+            )
             to_df = instagram_videos_to_dataframe
+
+            if videos:
+                method_label = "Manus AI" if method == "manus" else "yt-dlp"
+                st.write(f"  ✓ {method_label}で取得成功")
+                st.session_state["collection_method"] = method
         else:
             profile = fetch_tiktok_profile(username)
             videos = fetch_tiktok_videos(username)
             to_df = tiktok_videos_to_dataframe
+            st.session_state["collection_method"] = "ytdlp"
 
         if videos is None:
             status.update(label="メタデータ取得に失敗しました", state="error")
-            st.error(
-                f"{platform_label}のメタデータ取得に失敗しました。"
-                f"{platform_label}のアクセス制限の可能性があります。"
-                "「手動分析」タブでデータを手動入力して分析できます。"
-            )
+            if platform == "instagram":
+                st.error(
+                    "Instagramのメタデータ取得に失敗しました。\n"
+                    "上の「手動でReel URLを入力する」から直接URLを入力するか、"
+                    "「手動分析」タブでデータを手動入力して分析できます。"
+                )
+            else:
+                st.error(
+                    f"{platform_label}のメタデータ取得に失敗しました。"
+                    f"{platform_label}のアクセス制限の可能性があります。"
+                    "「手動分析」タブでデータを手動入力して分析できます。"
+                )
             return
 
         st.session_state["tiktok_profile"] = profile
@@ -969,6 +992,10 @@ def render_settings_tab():
         st.success(f"Gemini API Key: 設定済み (****{GEMINI_API_KEY[-4:]}) — Gemini動画分析用")
     else:
         st.warning("Gemini API Key: 未設定 (環境変数 GEMINI_API_KEY を設定するとGemini動画分析が使えます)")
+    if MANUS_API_KEY:
+        st.success(f"Manus API Key: 設定済み (****{MANUS_API_KEY[-4:]}) — Instagram自動収集用")
+    else:
+        st.warning("Manus API Key: 未設定 (環境変数 MANUS_API_KEY を設定するとInstagramの自動データ収集が使えます)")
 
     # Google Sheets test
     st.subheader("Google Sheets接続")
@@ -1015,7 +1042,7 @@ def render_settings_tab():
 # ==============================================================================
 
 st.title("📊 SNS Analyzer")
-st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します")
+st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します（Instagram: Manus AI / TikTok: yt-dlp）")
 
 tab1, tab2, tab3 = st.tabs(["自動分析", "手動分析", "設定"])
 
