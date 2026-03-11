@@ -193,6 +193,12 @@ def _extract_video(item):
         except (ValueError, OSError):
             pass
 
+    # Direct video download URL (Apify often provides this)
+    video_url = (
+        item.get("videoUrl") or item.get("video_url")
+        or item.get("displayUrl") or ""
+    )
+
     # Reel scraper uses playCount/playsCount for views, likesCount, commentsCount
     return {
         "id": shortcode,
@@ -210,6 +216,7 @@ def _extract_video(item):
         ),
         "upload_date": upload_date,
         "url": url,
+        "video_url": video_url,
         "duration": _to_int(
             item.get("videoDuration") or item.get("duration") or 0
         ),

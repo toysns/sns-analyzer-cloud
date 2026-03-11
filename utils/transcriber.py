@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 
+import requests
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,32 @@ def _extract_video_id(url):
     return str(abs(hash(url)))[:12]
 
 
-def _download_video(url, output_path):
-    """Download video using yt-dlp.
+def _download_video_direct(video_url, output_path):
+    """Download video directly via HTTP from a CDN URL.
+
+    Returns:
+        Tuple of (success: bool, error_message: str).
+    """
+    try:
+        resp = requests.get(video_url, timeout=120, stream=True)
+        resp.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return True, ""
+        return False, "ダウンロードしたファイルが空です"
+    except requests.exceptions.RequestException as e:
+        return False, f"直接ダウンロード失敗: {str(e)[:200]}"
+
+
+def _download_video(url, output_path, video_url=None):
+    """Download video using yt-dlp, with direct HTTP fallback.
+
+    Args:
+        url: Video page URL (for yt-dlp).
+        output_path: Path to save the video.
+        video_url: Optional direct video CDN URL for HTTP download fallback.
 
     Returns:
         Tuple of (success: bool, error_message: str).
@@ -50,8 +75,12 @@ def _download_video(url, output_path):
         )
         if result.returncode != 0:
             error_lines = [l.strip() for l in result.stderr.split('\n') if l.strip() and 'ERROR' in l.upper()]
-            error_msg = error_lines[-1][:200] if error_lines else result.stderr[-200:].strip()
-            return False, f"動画ダウンロード失敗: {error_msg}"
+            ytdlp_error = error_lines[-1][:200] if error_lines else result.stderr[-200:].strip()
+            # Try direct download fallback if video_url is available
+            if video_url:
+                logger.info("yt-dlp failed, trying direct download: %s", video_url[:100])
+                return _download_video_direct(video_url, output_path)
+            return False, f"動画ダウンロード失敗: {ytdlp_error}"
         if not os.path.exists(output_path):
             # yt-dlp may add an extension
             for ext in [".mp4", ".webm", ".mkv"]:
@@ -67,11 +96,17 @@ def _download_video(url, output_path):
                         os.rename(os.path.join(base_dir, f), output_path)
                         break
         if not os.path.exists(output_path):
+            if video_url:
+                return _download_video_direct(video_url, output_path)
             return False, "動画ファイルが見つかりません"
         return True, ""
     except subprocess.TimeoutExpired:
+        if video_url:
+            return _download_video_direct(video_url, output_path)
         return False, "動画ダウンロードがタイムアウトしました（120秒）"
     except FileNotFoundError:
+        if video_url:
+            return _download_video_direct(video_url, output_path)
         return False, "yt-dlpがインストールされていません"
 
 
@@ -157,7 +192,8 @@ def _transcribe_audio_openai(audio_path, api_key, language="ja"):
         return None, f"文字起こしエラー: {error_msg[:200]}"
 
 
-def transcribe_video_url(url, openai_api_key, temp_dir=None, language="ja"):
+def transcribe_video_url(url, openai_api_key, temp_dir=None, language="ja",
+                         video_url=None):
     """Full transcription pipeline: download → extract audio → transcribe.
 
     Args:
@@ -165,6 +201,7 @@ def transcribe_video_url(url, openai_api_key, temp_dir=None, language="ja"):
         openai_api_key: OpenAI API key.
         temp_dir: Directory for temporary files. Defaults to system temp.
         language: Language code for Whisper ("ja", "en", "ko", "zh", "auto").
+        video_url: Optional direct video CDN URL for download fallback.
 
     Returns:
         Tuple of (transcript: str | None, error: str | None).
@@ -179,7 +216,7 @@ def transcribe_video_url(url, openai_api_key, temp_dir=None, language="ja"):
 
     try:
         # Step 1: Download video
-        success, error = _download_video(url, video_path)
+        success, error = _download_video(url, video_path, video_url=video_url)
         if not success:
             return None, error
 
