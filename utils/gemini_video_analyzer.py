@@ -6,10 +6,14 @@ import subprocess
 import tempfile
 import time
 
-from google import genai
-from google.genai import types
-
 logger = logging.getLogger(__name__)
+
+
+def _get_genai():
+    """Lazy import google-genai to avoid startup crash if not installed."""
+    from google import genai
+    from google.genai import types
+    return genai, types
 
 GEMINI_VIDEO_PROMPT = """あなたはSNS動画分析の専門家です。この動画を詳細に分析し、以下の2つのセクションで日本語で回答してください。
 
@@ -226,6 +230,7 @@ def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None):
             return None, None, error
 
         # Step 2: Upload to Gemini File API
+        genai, types = _get_genai()
         client = genai.Client(api_key=gemini_api_key)
         try:
             uploaded_file = client.files.upload(

@@ -1,4 +1,9 @@
-"""Instagram metadata fetching via yt-dlp."""
+"""Instagram metadata fetching via Apify (primary) with yt-dlp fallback.
+
+Data collection strategy:
+    - Primary: Apify Instagram Profile Scraper (~$0.003/query, reliable)
+    - Fallback: yt-dlp (used when Apify is unavailable or fails)
+"""
 
 import json
 import logging
@@ -7,6 +12,8 @@ import subprocess
 from datetime import datetime
 
 import pandas as pd
+
+from utils.apify_client import collect_instagram_data, get_apify_api_token
 
 logger = logging.getLogger(__name__)
 
@@ -221,3 +228,92 @@ def videos_to_dataframe(videos):
             "URL": v["url"],
         })
     return pd.DataFrame(rows)
+
+
+# =============================================================================
+# Apify-based Instagram collection (primary method)
+# =============================================================================
+
+def is_apify_available():
+    """Check if Apify API token is configured."""
+    return bool(get_apify_api_token())
+
+
+def fetch_instagram_via_apify(username, max_count=30, progress_callback=None):
+    """Fetch Instagram profile and videos using Apify scraper.
+
+    Args:
+        username: Instagram username (without @).
+        max_count: Max number of videos to collect.
+        progress_callback: Optional callable(str) for status updates.
+
+    Returns:
+        (profile, videos, error): profile dict, list of video dicts, or error string.
+    """
+    api_token = get_apify_api_token()
+    if not api_token:
+        return None, None, "APIFY_API_TOKEN未設定"
+
+    profile, videos, error = collect_instagram_data(
+        username,
+        api_token=api_token,
+        max_videos=max_count,
+        progress_callback=progress_callback,
+    )
+
+    if error:
+        logger.warning("Apify collection failed for @%s: %s", username, error)
+        return profile, videos, error
+
+    return profile, videos, None
+
+
+def fetch_instagram_auto(username, max_count=30, progress_callback=None):
+    """Auto-fetch Instagram data: Apify first, yt-dlp fallback.
+
+    This is the unified entry point for Instagram data collection.
+    It tries Apify first (reliable, cheap) and falls back to
+    yt-dlp if Apify is unavailable or fails.
+
+    Args:
+        username: Instagram username (without @).
+        max_count: Max number of videos to collect.
+        progress_callback: Optional callable(str) for status updates.
+
+    Returns:
+        (profile, videos, method, error):
+            profile: dict with profile info.
+            videos: list of video dicts.
+            method: "apify" or "ytdlp" indicating which method succeeded.
+            error: error string if both methods failed.
+    """
+    # Try Apify first
+    if is_apify_available():
+        if progress_callback:
+            progress_callback("ApifyでInstagramデータを収集中...")
+
+        profile, videos, error = fetch_instagram_via_apify(
+            username, max_count, progress_callback
+        )
+        if videos:
+            logger.info("Apify collection succeeded for @%s: %d videos", username, len(videos))
+            return profile, videos, "apify", None
+
+        logger.warning("Apify failed for @%s, falling back to yt-dlp: %s", username, error)
+        if progress_callback:
+            progress_callback(f"Apify失敗 ({error})、yt-dlpにフォールバック中...")
+    else:
+        if progress_callback:
+            progress_callback("APIFY_API_TOKEN未設定のため、yt-dlpで取得中...")
+
+    # Fallback to yt-dlp
+    if progress_callback:
+        progress_callback("yt-dlpでInstagramデータを取得中...")
+
+    profile = fetch_instagram_profile(username)
+    videos = fetch_instagram_videos(username, max_count)
+
+    if videos:
+        return profile, videos, "ytdlp", None
+
+    return profile, None, "ytdlp", "Instagram動画の取得に失敗しました（Apify・yt-dlp両方失敗）"
