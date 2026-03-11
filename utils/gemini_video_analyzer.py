@@ -281,21 +281,39 @@ def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None, video_url=None
         if error:
             return None, None, error
 
-        # Step 4: Analyze with Gemini
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[GEMINI_VIDEO_PROMPT, file_ref],
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=8000,
-                ),
-            )
-        except Exception as e:
-            error_msg = str(e)
-            if "api key" in error_msg.lower() or "api_key" in error_msg.lower():
-                return None, None, "Gemini APIキーが無効です"
-            return None, None, f"Gemini分析エラー: {error_msg[:300]}"
+        # Step 4: Analyze with Gemini (with retry for rate limits)
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[GEMINI_VIDEO_PROMPT, file_ref],
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        max_output_tokens=8000,
+                    ),
+                )
+                last_error = None
+                break
+            except Exception as e:
+                error_msg = str(e)
+                if "api key" in error_msg.lower() or "api_key" in error_msg.lower():
+                    return None, None, "Gemini APIキーが無効です"
+                if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                    wait_sec = 15 * (attempt + 1)
+                    logger.warning(
+                        "Gemini rate limit hit (attempt %d/%d), waiting %ds...",
+                        attempt + 1, max_retries, wait_sec,
+                    )
+                    last_error = error_msg
+                    if attempt < max_retries - 1:
+                        time.sleep(wait_sec)
+                        continue
+                return None, None, f"Gemini分析エラー: {error_msg[:300]}"
+
+        if last_error:
+            return None, None, f"Geminiレート制限: {max_retries}回リトライしましたが失敗しました。少し待ってから再試行してください。"
 
         if not response.text:
             return None, None, "Geminiからの応答が空です"
