@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 
+import requests
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -261,8 +262,23 @@ def _get_position_label(index, total):
     return "後半"
 
 
-def _download_video(url, output_path):
-    """Download video using yt-dlp.
+def _download_video_direct(video_url, output_path):
+    """Download video directly via HTTP from a CDN URL."""
+    try:
+        resp = requests.get(video_url, timeout=120, stream=True)
+        resp.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return True, ""
+        return False, "ダウンロードしたファイルが空です"
+    except requests.exceptions.RequestException as e:
+        return False, f"直接ダウンロード失敗: {str(e)[:200]}"
+
+
+def _download_video(url, output_path, video_url=None):
+    """Download video using yt-dlp, with direct HTTP fallback.
 
     Returns:
         Tuple of (success: bool, error_message: str).
@@ -281,6 +297,9 @@ def _download_video(url, output_path):
             timeout=120,
         )
         if result.returncode != 0:
+            if video_url:
+                logger.info("yt-dlp failed, trying direct download")
+                return _download_video_direct(video_url, output_path)
             return False, f"動画ダウンロード失敗: {result.stderr[:200]}"
         if not os.path.exists(output_path):
             for ext in [".mp4", ".webm", ".mkv"]:
@@ -295,15 +314,22 @@ def _download_video(url, output_path):
                         os.rename(os.path.join(base_dir, f), output_path)
                         break
         if not os.path.exists(output_path):
+            if video_url:
+                return _download_video_direct(video_url, output_path)
             return False, "動画ファイルが見つかりません"
         return True, ""
     except subprocess.TimeoutExpired:
+        if video_url:
+            return _download_video_direct(video_url, output_path)
         return False, "動画ダウンロードがタイムアウトしました（120秒）"
     except FileNotFoundError:
+        if video_url:
+            return _download_video_direct(video_url, output_path)
         return False, "yt-dlpがインストールされていません"
 
 
-def analyze_video_visuals(url, openai_api_key, num_frames=5, temp_dir=None):
+def analyze_video_visuals(url, openai_api_key, num_frames=5, temp_dir=None,
+                          video_url=None):
     """Full visual analysis pipeline: download → extract frames → Vision API.
 
     Args:
@@ -311,6 +337,7 @@ def analyze_video_visuals(url, openai_api_key, num_frames=5, temp_dir=None):
         openai_api_key: OpenAI API key.
         num_frames: Number of keyframes to extract (default 5).
         temp_dir: Temp directory. Defaults to system temp.
+        video_url: Optional direct video CDN URL for download fallback.
 
     Returns:
         Tuple of (visual_analysis_text, error).
@@ -327,7 +354,7 @@ def analyze_video_visuals(url, openai_api_key, num_frames=5, temp_dir=None):
 
     try:
         # Step 1: Download video
-        success, error = _download_video(url, video_path)
+        success, error = _download_video(url, video_path, video_url=video_url)
         if not success:
             return None, error
 

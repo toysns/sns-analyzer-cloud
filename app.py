@@ -569,7 +569,8 @@ def _run_analysis_with_selection(username, mode):
                 # Gemini unified analysis: transcription + visual in one call
                 st.write(f"  [{i+1}/{len(selected)}] {title_short} — Gemini動画分析中...")
                 transcript, visual_analysis, error = analyze_video_with_gemini(
-                    video["url"], GEMINI_API_KEY
+                    video["url"], GEMINI_API_KEY,
+                    video_url=video.get("video_url"),
                 )
                 if transcript:
                     video_with_transcript["transcript"] = transcript
@@ -586,7 +587,8 @@ def _run_analysis_with_selection(username, mode):
                 # Traditional pipeline: Whisper + optional GPT-4o Vision
                 st.write(f"  [{i+1}/{len(selected)}] {title_short} — 文字起こし中...")
                 transcript, error = transcribe_video_url(
-                    video["url"], OPENAI_API_KEY, language=whisper_lang
+                    video["url"], OPENAI_API_KEY, language=whisper_lang,
+                    video_url=video.get("video_url"),
                 )
                 if transcript:
                     video_with_transcript["transcript"] = transcript
@@ -600,7 +602,8 @@ def _run_analysis_with_selection(username, mode):
                 if enable_visual:
                     st.write(f"  [{i+1}/{len(selected)}] {title_short} — 映像分析中...")
                     visual_analysis, vis_error = analyze_video_visuals(
-                        video["url"], OPENAI_API_KEY, num_frames=5
+                        video["url"], OPENAI_API_KEY, num_frames=5,
+                        video_url=video.get("video_url"),
                     )
                     if visual_analysis:
                         video_with_transcript["visual_analysis"] = visual_analysis
