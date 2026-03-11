@@ -126,33 +126,64 @@ def render_auto_analysis_tab():
         # Default to TikTok for bare usernames
         platform = "tiktok"
 
-    # Extract username based on platform
+    # --- Instagram: Reel URLs input flow ---
     if platform == "instagram":
         username = extract_instagram_username(url_input)
-    else:
-        username = extract_tiktok_username(url_input)
+        if not username:
+            st.error("ユーザー名を取得できませんでした。URLを確認してください。")
+            return
 
+        st.session_state["account_name"] = username
+        st.session_state["platform"] = "Instagram"
+
+        # Phase 1: Input Reel URLs
+        if st.session_state.get("tiktok_videos") is None:
+            st.caption(f"検出プラットフォーム: **Instagram** / ユーザー: **@{username}**")
+            st.info(
+                "Instagramはアカウントからの自動取得ができないため、分析したいReelのURLを下に貼り付けてください。\n\n"
+                "ReelのURL例: `https://www.instagram.com/reel/ABC123/`"
+            )
+            reel_urls_input = st.text_area(
+                "Reel URLを1行に1つずつ貼り付け",
+                placeholder="https://www.instagram.com/reel/ABC123/\nhttps://www.instagram.com/reel/DEF456/\nhttps://www.instagram.com/reel/GHI789/",
+                height=150,
+                key="instagram_reel_urls",
+            )
+            if st.button("この動画を分析対象にする", type="primary", key="fetch_ig_reels"):
+                _build_instagram_video_list(username, reel_urls_input)
+            return
+
+        # Phase 2: Video selection
+        if st.session_state.get("analysis_report") is None:
+            _render_video_selector(username, mode)
+            return
+
+        # Phase 3: Show results
+        _show_analysis_results(username, mode)
+        return
+
+    # --- TikTok: auto-fetch flow ---
+    username = extract_tiktok_username(url_input)
     if not username:
         st.error("ユーザー名を取得できませんでした。URLを確認してください。")
         return
 
-    platform_label = "Instagram" if platform == "instagram" else "TikTok"
     st.session_state["account_name"] = username
-    st.session_state["platform"] = platform_label
+    st.session_state["platform"] = "TikTok"
 
-    # --- Phase 1: Fetch metadata ---
+    # Phase 1: Fetch metadata
     if st.session_state.get("tiktok_videos") is None:
-        st.caption(f"検出プラットフォーム: **{platform_label}** / ユーザー: **@{username}**")
+        st.caption(f"検出プラットフォーム: **TikTok** / ユーザー: **@{username}**")
         if st.button("動画を取得", type="primary", key="fetch_videos"):
-            _fetch_metadata(username, platform)
+            _fetch_metadata(username, "tiktok")
         return
 
-    # --- Phase 2: Video selection ---
+    # Phase 2: Video selection
     if st.session_state.get("analysis_report") is None:
         _render_video_selector(username, mode)
         return
 
-    # --- Phase 3: Show results ---
+    # Phase 3: Show results
     _show_analysis_results(username, mode)
 
 
@@ -190,6 +221,51 @@ def _fetch_metadata(username, platform="tiktok"):
             msg += f" | フォロワー: {profile.get('followers', '不明')}"
         status.update(label=msg, state="complete")
 
+    st.rerun()
+
+
+def _build_instagram_video_list(username, reel_urls_input):
+    """Build video list from user-provided Instagram Reel URLs."""
+    if not reel_urls_input or not reel_urls_input.strip():
+        st.warning("Reel URLを1つ以上入力してください。")
+        return
+
+    urls = [u.strip() for u in reel_urls_input.strip().split("\n") if u.strip()]
+    # Filter to valid Instagram Reel URLs
+    valid_urls = [u for u in urls if "instagram.com/reel/" in u or "instagram.com/p/" in u]
+
+    if not valid_urls:
+        st.error("有効なInstagram Reel URLが見つかりませんでした。\n例: https://www.instagram.com/reel/ABC123/")
+        return
+
+    videos = []
+    for i, url in enumerate(valid_urls):
+        # Extract reel ID from URL
+        reel_id = ""
+        match = re.search(r"(?:reel|p)/([A-Za-z0-9_-]+)", url)
+        if match:
+            reel_id = match.group(1)
+
+        videos.append({
+            "id": reel_id,
+            "title": f"Reel {i + 1}: {reel_id}",
+            "view_count": 0,
+            "like_count": 0,
+            "comment_count": 0,
+            "upload_date": "",
+            "url": url,
+            "duration": 0,
+        })
+
+    st.session_state["tiktok_profile"] = {
+        "username": username,
+        "display_name": username,
+        "followers": "不明",
+    }
+    st.session_state["tiktok_videos"] = videos
+    st.session_state["tiktok_df"] = instagram_videos_to_dataframe(videos)
+
+    st.success(f"{len(videos)}本のReelを登録しました。")
     st.rerun()
 
 
