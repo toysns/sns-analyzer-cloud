@@ -1,10 +1,10 @@
 """Apify API client for Instagram data collection.
 
-Uses Apify's Instagram Profile Scraper actor to collect Reel metadata.
+Uses Apify's Instagram Reel Scraper actor to collect Reel metadata.
 Much cheaper (~$0.003/query) and more reliable than browser-agent approaches.
 
 API Reference: https://docs.apify.com/api/v2
-Actor: apify/instagram-profile-scraper
+Actor: apify/instagram-reel-scraper
 """
 
 import logging
@@ -16,8 +16,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Apify actor for Instagram profile + posts/reels scraping
-ACTOR_ID = "apify~instagram-profile-scraper"
+# Apify actor for Instagram reels scraping
+ACTOR_ID = "apify~instagram-reel-scraper"
 APIFY_API_BASE = "https://api.apify.com/v2"
 # Synchronous run timeout (Apify max: 300s)
 SYNC_TIMEOUT = 290
@@ -58,9 +58,9 @@ def collect_instagram_data(username, api_token=None, max_videos=30,
     if progress_callback:
         progress_callback("Apifyでデータ収集中...")
 
-    # Build actor input
+    # Build actor input (instagram-reel-scraper uses "username" not "usernames")
     run_input = {
-        "usernames": [username],
+        "username": [username],
         "resultsLimit": max_videos,
     }
 
@@ -144,32 +144,32 @@ def _parse_items(items, username):
 
 
 def _extract_profile(item, username):
-    """Extract profile info from an Apify item."""
+    """Extract profile info from an Apify reel-scraper item."""
     return {
-        "username": item.get("ownerUsername") or username,
-        "display_name": item.get("ownerFullName") or username,
-        "followers": _to_int(item.get("followersCount", 0)),
+        "username": item.get("ownerUsername") or item.get("username") or username,
+        "display_name": item.get("ownerFullName") or item.get("ownerUsername") or username,
+        "followers": _to_int(
+            item.get("followersCount")
+            or item.get("ownerFollowerCount")
+            or 0
+        ),
     }
 
 
 def _extract_video(item):
-    """Extract video/reel data from an Apify dataset item.
+    """Extract video/reel data from an Apify reel-scraper dataset item.
 
+    The instagram-reel-scraper returns reels directly so no type filtering needed.
     Handles various field names that Apify may return.
     """
-    # Get post type - we want videos/reels
-    item_type = item.get("type", "")
-    is_video = item.get("isVideo", False)
-
-    # Accept video/reel items, or items without type info (include them)
-    if item_type in ("Image", "Sidecar") and not is_video:
-        return None
-
     # Extract shortcode/ID
-    shortcode = item.get("shortCode") or item.get("shortcode") or item.get("id", "")
+    shortcode = (
+        item.get("shortCode") or item.get("shortcode")
+        or item.get("id") or item.get("inputUrl") or ""
+    )
 
     # Build URL
-    url = item.get("url") or ""
+    url = item.get("url") or item.get("inputUrl") or ""
     if not url and shortcode:
         url = f"https://www.instagram.com/reel/{shortcode}/"
 
@@ -182,11 +182,10 @@ def _extract_video(item):
 
     # Parse timestamp
     upload_date = ""
-    timestamp = item.get("timestamp")
+    timestamp = item.get("timestamp") or item.get("createDateTime")
     if timestamp:
         try:
             if isinstance(timestamp, str):
-                # ISO format: "2025-01-15T12:00:00.000Z"
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 upload_date = dt.strftime("%Y-%m-%d")
             elif isinstance(timestamp, (int, float)):
@@ -194,15 +193,26 @@ def _extract_video(item):
         except (ValueError, OSError):
             pass
 
+    # Reel scraper uses playCount/playsCount for views, likesCount, commentsCount
     return {
         "id": shortcode,
         "title": caption,
-        "view_count": _to_int(item.get("videoViewCount") or item.get("viewCount") or 0),
-        "like_count": _to_int(item.get("likesCount") or item.get("likes") or 0),
-        "comment_count": _to_int(item.get("commentsCount") or item.get("comments") or 0),
+        "view_count": _to_int(
+            item.get("playCount") or item.get("playsCount")
+            or item.get("videoPlayCount") or item.get("videoViewCount")
+            or item.get("viewCount") or 0
+        ),
+        "like_count": _to_int(
+            item.get("likesCount") or item.get("likes") or 0
+        ),
+        "comment_count": _to_int(
+            item.get("commentsCount") or item.get("comments") or 0
+        ),
         "upload_date": upload_date,
         "url": url,
-        "duration": _to_int(item.get("videoDuration") or item.get("duration") or 0),
+        "duration": _to_int(
+            item.get("videoDuration") or item.get("duration") or 0
+        ),
     }
 
 
