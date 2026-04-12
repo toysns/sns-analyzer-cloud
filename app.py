@@ -6,6 +6,7 @@ import re
 
 import streamlit as st
 
+from utils.auth import check_authentication
 from utils.session import init_session_state, clear_analysis_state
 from utils.tiktok_fetcher import (
     extract_username as extract_tiktok_username,
@@ -38,6 +39,20 @@ from utils.competitor_analyzer import (
     format_competitor_comparison,
     build_main_account_stats,
 )
+from utils.knowledge import (
+    list_knowledge_files,
+    read_knowledge_file,
+    save_knowledge_file,
+    delete_knowledge_file,
+)
+from utils.chat import (
+    WELCOME_MESSAGE,
+    detect_url_in_message,
+    build_chat_system_prompt,
+    stream_chat_response,
+    fetch_account_data,
+    run_chat_analysis,
+)
 
 # --- Page Config ---
 st.set_page_config(
@@ -45,6 +60,10 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+
+# --- Authentication Gate ---
+if not check_authentication():
+    st.stop()
 
 # --- Initialize ---
 init_session_state()
@@ -712,10 +731,58 @@ def _show_analysis_results(username, mode):
             mime="text/markdown",
         )
 
+        # Feedback buttons
+        st.divider()
+        st.markdown("**この分析は役に立ちましたか？**")
+        fb_col1, fb_col2 = st.columns(2)
+        with fb_col1:
+            if st.button("👍 役に立った", key="feedback_positive"):
+                _save_feedback(username, "positive", "")
+                st.success("フィードバックありがとうございます！")
+        with fb_col2:
+            if st.button("👎 改善が必要", key="feedback_negative"):
+                st.session_state["_show_feedback_input"] = True
+        if st.session_state.get("_show_feedback_input"):
+            fb_comment = st.text_input(
+                "改善点を教えてください", key="feedback_comment_input"
+            )
+            if st.button("送信", key="feedback_submit"):
+                _save_feedback(username, "negative", fb_comment)
+                st.session_state["_show_feedback_input"] = False
+                st.success("フィードバックありがとうございます！改善に活かします。")
+
     # Reset button
     if st.button("新しい分析を開始", key="reset_auto"):
         clear_analysis_state()
         st.rerun()
+
+
+def _save_feedback(account_name, sentiment, comment):
+    """Save user feedback to Google Sheets."""
+    from datetime import datetime
+
+    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
+    if not creds_raw:
+        return
+    client = get_sheets_client(creds_raw)
+    if not client:
+        return
+    try:
+        spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "TikTok分析データベース")
+        spreadsheet = client.open(spreadsheet_name)
+        try:
+            sheet = spreadsheet.worksheet("フィードバック")
+        except Exception:
+            sheet = spreadsheet.add_worksheet("フィードバック", rows=1000, cols=4)
+            sheet.append_row(["日時", "アカウント", "評価", "コメント"])
+        sheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            account_name,
+            sentiment,
+            comment,
+        ])
+    except Exception:
+        pass  # Feedback saving is best-effort
 
 
 def _save_to_sheets(transcripts, account_name, platform_prefix):
@@ -1009,6 +1076,210 @@ def render_settings_tab():
     for num, (name, desc) in ANALYSIS_MODES.items():
         st.markdown(f"**{num}. {name}** - {desc}")
 
+    # --- Knowledge Base Management (admin only) ---
+    st.divider()
+    st.subheader("知識ベース管理")
+
+    admin_password = os.environ.get("ADMIN_PASSWORD", "")
+    if not admin_password:
+        st.info("ADMIN_PASSWORD 環境変数を設定すると、知識ベースの管理ができます。")
+        return
+
+    if not st.session_state.get("admin_authenticated"):
+        pwd = st.text_input("管理者パスワード", type="password", key="_admin_pwd")
+        if st.button("認証", key="admin_auth_btn"):
+            if pwd == admin_password:
+                st.session_state["admin_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("パスワードが違います")
+        return
+
+    st.success("管理者認証済み")
+
+    # List existing files
+    files = list_knowledge_files()
+    if files:
+        st.markdown(f"**登録済みファイル: {len(files)} 件**")
+        for fname, size in files:
+            with st.expander(f"{fname} ({size:,} bytes)"):
+                content = read_knowledge_file(fname)
+                edited = st.text_area(
+                    "内容を編集",
+                    value=content,
+                    height=300,
+                    key=f"edit_{fname}",
+                )
+                col_save, col_delete = st.columns(2)
+                with col_save:
+                    if st.button("保存", key=f"save_{fname}"):
+                        save_knowledge_file(fname, edited)
+                        st.success(f"{fname} を保存しました（次回分析から反映）")
+                with col_delete:
+                    if st.button("削除", key=f"del_{fname}", type="secondary"):
+                        delete_knowledge_file(fname)
+                        st.warning(f"{fname} を削除しました")
+                        st.rerun()
+
+    # Add new file
+    st.markdown("---")
+    st.markdown("**新しい知識ファイルを追加**")
+    new_name = st.text_input(
+        "ファイル名（例: new-strategy.md）",
+        key="new_knowledge_name",
+    )
+    new_content = st.text_area(
+        "内容",
+        height=200,
+        key="new_knowledge_content",
+        placeholder="新しいSNSノウハウや事例をここに入力...",
+    )
+    if st.button("追加", key="add_knowledge", type="primary"):
+        if not new_name:
+            st.error("ファイル名を入力してください")
+        elif not new_name.endswith(".md"):
+            st.error("ファイル名は .md で終わる必要があります")
+        elif not new_content.strip():
+            st.error("内容を入力してください")
+        else:
+            save_knowledge_file(new_name, new_content)
+            st.success(f"{new_name} を追加しました（次回分析から反映）")
+            st.rerun()
+
+
+# ==============================================================================
+# Chat Tab
+# ==============================================================================
+
+
+def render_chat_tab():
+    """Render the conversational analysis chat interface."""
+    # Initialize chat history with welcome message
+    if not st.session_state["chat_messages"]:
+        st.session_state["chat_messages"] = [
+            {"role": "assistant", "content": WELCOME_MESSAGE}
+        ]
+
+    # Display chat history
+    for msg in st.session_state["chat_messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Chat input
+    user_input = st.chat_input("メッセージを入力...")
+    if not user_input:
+        return
+
+    # Add user message
+    st.session_state["chat_messages"].append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # Check for URL in message
+    url, platform = detect_url_in_message(user_input)
+
+    if url and not st.session_state.get("chat_analysis_running"):
+        _handle_analysis_in_chat(url, platform)
+    else:
+        _handle_chat_response()
+
+
+def _handle_analysis_in_chat(url, platform):
+    """Handle account analysis triggered by URL detection in chat."""
+    st.session_state["chat_analysis_running"] = True
+
+    with st.chat_message("assistant"):
+        with st.status("分析を実行中...", expanded=True) as status:
+            # Step 1: Fetch metadata
+            st.write("メタデータを取得中...")
+            profile, videos, error = fetch_account_data(url, platform)
+
+            if error and not profile:
+                status.update(label="エラー", state="error")
+                msg = f"メタデータの取得に失敗しました: {error}"
+                st.error(msg)
+                st.session_state["chat_messages"].append(
+                    {"role": "assistant", "content": msg}
+                )
+                st.session_state["chat_analysis_running"] = False
+                return
+
+            username = profile.get("username") or profile.get("display_name", "不明")
+            video_count = len(videos) if videos else 0
+            st.write(f"@{username} の動画を {video_count} 本取得しました")
+
+            if video_count == 0:
+                status.update(label="完了", state="complete")
+                msg = f"@{username} のプロフィールは取得できましたが、動画が見つかりませんでした。手動分析タブからURLを個別に入力して分析できます。"
+                st.markdown(msg)
+                st.session_state["chat_messages"].append(
+                    {"role": "assistant", "content": msg}
+                )
+                st.session_state["chat_analysis_running"] = False
+                return
+
+            # Step 2: Transcribe & Analyze
+            st.write("文字起こし & 分析中（数分かかります）...")
+            account_data, transcripts, report, error = run_chat_analysis(
+                profile, videos, platform
+            )
+
+            if error:
+                status.update(label="エラー", state="error")
+                msg = f"分析中にエラーが発生しました: {error}"
+                st.error(msg)
+                st.session_state["chat_messages"].append(
+                    {"role": "assistant", "content": msg}
+                )
+                st.session_state["chat_analysis_running"] = False
+                return
+
+            status.update(label="分析完了!", state="complete")
+
+        # Display report
+        st.markdown(report)
+
+        # Save context for follow-up questions
+        st.session_state["chat_context"] = {
+            "account_data": account_data,
+            "transcripts": transcripts,
+            "report": report,
+        }
+        st.session_state["chat_messages"].append(
+            {"role": "assistant", "content": report}
+        )
+
+        # Follow-up prompt
+        followup = "\n\n---\n何か気になる点や、さらに深掘りしたいポイントはありますか？"
+        st.markdown(followup)
+        st.session_state["chat_messages"].append(
+            {"role": "assistant", "content": followup}
+        )
+
+    st.session_state["chat_analysis_running"] = False
+
+
+def _handle_chat_response():
+    """Handle a normal chat message (non-URL) with streaming response."""
+    context = st.session_state.get("chat_context", {})
+    system_prompt = build_chat_system_prompt(context=context if context else None)
+
+    # Build messages for API (user/assistant pairs only)
+    api_messages = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state["chat_messages"]
+        if m["role"] in ("user", "assistant")
+    ]
+
+    with st.chat_message("assistant"):
+        response = st.write_stream(
+            stream_chat_response(api_messages, system_prompt)
+        )
+
+    st.session_state["chat_messages"].append(
+        {"role": "assistant", "content": response}
+    )
+
 
 # ==============================================================================
 # Main App
@@ -1017,7 +1288,12 @@ def render_settings_tab():
 st.title("📊 SNS Analyzer")
 st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します")
 
-tab1, tab2, tab3 = st.tabs(["自動分析", "手動分析", "設定"])
+tab_chat, tab1, tab2, tab3 = st.tabs(
+    ["💬 チャット", "自動分析", "手動分析", "設定"]
+)
+
+with tab_chat:
+    render_chat_tab()
 
 with tab1:
     render_auto_analysis_tab()

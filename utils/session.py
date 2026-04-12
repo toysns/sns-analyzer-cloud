@@ -3,6 +3,12 @@
 import streamlit as st
 
 DEFAULTS = {
+    # Authentication
+    "authenticated": False,
+    # Chat
+    "chat_messages": [],
+    "chat_context": {},
+    "chat_analysis_running": False,
     # Common
     "platform": "",
     "account_name": "",
