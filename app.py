@@ -31,7 +31,8 @@ from utils.report import (
 )
 from utils.screenshot_reader import extract_metadata_from_screenshot
 from utils.visual_analyzer import analyze_video_visuals
-from utils.gemini_video_analyzer import analyze_video_with_gemini
+# Lazy import: gemini_video_analyzer is slow to load (google-genai init)
+# from utils.gemini_video_analyzer import analyze_video_with_gemini
 from utils.comment_analyzer import fetch_and_analyze_comments
 from utils.trend_analyzer import analyze_trends, format_trend_analysis
 from utils.competitor_analyzer import (
@@ -554,6 +555,7 @@ def _run_analysis_with_selection(username, mode):
             if enable_gemini:
                 # Gemini unified analysis: transcription + visual in one call
                 st.write(f"  [{i+1}/{len(selected)}] {title_short} — Gemini動画分析中...")
+                from utils.gemini_video_analyzer import analyze_video_with_gemini
                 transcript, visual_analysis, error = analyze_video_with_gemini(
                     video["url"], GEMINI_API_KEY
                 )
