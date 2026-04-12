@@ -303,7 +303,7 @@ def _analyze_single_video(video, gemini_api_key, openai_api_key, use_gemini):
 
 
 def run_chat_analysis(profile, videos, platform, progress_callback=None,
-                      max_videos=10, max_workers=5):
+                      max_videos=50, max_workers=10):
     """Run the full analysis pipeline for chat mode with parallel processing.
 
     Uses Gemini for video understanding (transcription + visual analysis),
@@ -387,7 +387,8 @@ def run_chat_analysis(profile, videos, platform, progress_callback=None,
 
     # Run Claude analysis (mode 2 = improvement suggestions)
     from utils.analyzer import run_analysis
-    report, error = run_analysis(account_data, transcripts, 2, openai_api_key)
+    # Mode 6 = アカウント成長戦略（チャット専用、マネタイズより成長にフォーカス）
+    report, error = run_analysis(account_data, transcripts, 6, openai_api_key)
 
     if error:
         return account_data, transcripts, None, error
