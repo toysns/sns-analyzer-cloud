@@ -15,8 +15,6 @@ from utils.tiktok_fetcher import (
 )
 from utils.instagram_fetcher import (
     extract_instagram_username,
-    fetch_instagram_profile,
-    fetch_instagram_videos,
 )
 from utils.transcriber import transcribe_video_url
 from utils.trend_analyzer import analyze_trends, format_trend_analysis
@@ -136,6 +134,65 @@ def stream_chat_response(messages, system_prompt):
             yield f"エラーが発生しました: {error_msg[:200]}"
 
 
+def _fetch_instagram_via_apify(username, max_count=50):
+    """Fetch Instagram Reels via Apify Instagram Reel Scraper.
+
+    Returns:
+        Tuple of (profile, videos, error).
+    """
+    import json
+    import subprocess
+
+    apify_token = os.environ.get("APIFY_TOKEN", "")
+    if not apify_token:
+        return None, None, "APIFY_TOKEN が設定されていません"
+
+    # Call Apify API directly
+    import urllib.request
+    api_url = "https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items"
+    payload = json.dumps({
+        "username": [username],
+        "resultsLimit": max_count,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{api_url}?token={apify_token}",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            items = json.loads(resp.read().decode())
+    except Exception as e:
+        return None, None, f"Apify API エラー: {str(e)[:200]}"
+
+    if not items:
+        return None, None, f"@{username} の Reel が見つかりませんでした"
+
+    # Build profile from first item
+    first = items[0]
+    profile = {
+        "username": first.get("ownerUsername", username),
+        "display_name": first.get("ownerFullName", username),
+    }
+
+    # Convert Apify items to our video format
+    videos = []
+    for item in items:
+        videos.append({
+            "title": (item.get("caption") or "")[:100],
+            "url": item.get("url", ""),
+            "view_count": item.get("viewCount") or item.get("playCount") or 0,
+            "like_count": item.get("likesCount", 0),
+            "comment_count": item.get("commentsCount", 0),
+            "upload_date": (item.get("timestamp") or "")[:10],
+        })
+
+    return profile, videos, None
+
+
 def fetch_account_data(url, platform):
     """Fetch account metadata and videos.
 
@@ -155,12 +212,11 @@ def fetch_account_data(url, platform):
                 return profile, [], "動画が見つかりませんでした"
         elif platform == "instagram":
             username = extract_instagram_username(url)
-            profile = fetch_instagram_profile(username)
-            if not profile:
-                return None, None, f"@{username} のプロフィールを取得できませんでした"
-            videos = fetch_instagram_videos(username, max_count=50)
+            profile, videos, error = _fetch_instagram_via_apify(username)
+            if error:
+                return None, None, error
             if not videos:
-                return profile, [], "動画が見つかりませんでした"
+                return profile, [], "Reel が見つかりませんでした"
         else:
             return None, None, "対応していないプラットフォームです"
 
