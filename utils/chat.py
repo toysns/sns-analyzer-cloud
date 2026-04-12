@@ -172,12 +172,22 @@ def fetch_account_data(url, platform):
         return None, None, f"メタデータ取得エラー: {str(e)[:200]}"
 
 
-def run_chat_analysis(profile, videos, platform):
+def run_chat_analysis(profile, videos, platform, progress_callback=None):
     """Run the full analysis pipeline for chat mode.
+
+    Uses Gemini for video understanding (transcription + visual analysis),
+    then Claude for deep analysis with the SKILL framework.
+
+    Args:
+        profile: Account profile dict.
+        videos: List of video dicts.
+        platform: "tiktok" or "instagram".
+        progress_callback: Optional callable(message) for progress updates.
 
     Returns:
         Tuple of (account_data, transcripts, report, error).
     """
+    gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 
     # Sample videos for analysis
@@ -185,25 +195,46 @@ def run_chat_analysis(profile, videos, platform):
     if not sampled:
         return None, None, None, "分析対象の動画がありません"
 
-    # Transcribe
+    # Analyze videos with Gemini (preferred) or fall back to Whisper
     transcripts = []
-    for video in sampled:
+    use_gemini = bool(gemini_api_key)
+
+    for i, video in enumerate(sampled):
         video_url = video.get("url", "")
         if not video_url:
             continue
 
-        transcript_text, err = transcribe_video_url(
-            video_url, openai_api_key, language="ja"
-        )
-        transcripts.append({
+        title_short = (video.get("title") or "無題")[:30]
+        if progress_callback:
+            method = "Gemini" if use_gemini else "Whisper"
+            progress_callback(
+                f"[{i+1}/{len(sampled)}] {title_short} — {method}で分析中..."
+            )
+
+        transcript_data = {
             "title": video.get("title", ""),
             "url": video_url,
             "view_count": video.get("view_count", 0),
             "like_count": video.get("like_count", 0),
             "comment_count": video.get("comment_count", 0),
             "upload_date": video.get("upload_date", ""),
-            "transcript": transcript_text or "(文字起こし失敗)",
-        })
+        }
+
+        if use_gemini:
+            from utils.gemini_video_analyzer import analyze_video_with_gemini
+            transcript, visual_analysis, err = analyze_video_with_gemini(
+                video_url, gemini_api_key
+            )
+            transcript_data["transcript"] = transcript or f"(文字起こし失敗: {err})"
+            if visual_analysis:
+                transcript_data["visual_analysis"] = visual_analysis
+        else:
+            transcript_text, err = transcribe_video_url(
+                video_url, openai_api_key, language="ja"
+            )
+            transcript_data["transcript"] = transcript_text or "(文字起こし失敗)"
+
+        transcripts.append(transcript_data)
 
     # Build account data
     account_data = {
@@ -218,7 +249,10 @@ def run_chat_analysis(profile, videos, platform):
     if trend_result:
         account_data["trend_analysis"] = format_trend_analysis(trend_result)
 
-    # Run Claude analysis (mode 2 = improvement suggestions, most useful for chat)
+    if progress_callback:
+        progress_callback("Claude で分析レポートを生成中...")
+
+    # Run Claude analysis (mode 2 = improvement suggestions)
     from utils.analyzer import run_analysis
     report, error = run_analysis(account_data, transcripts, 2, openai_api_key)
 
