@@ -1167,10 +1167,18 @@ def render_chat_tab():
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
-    user_input = st.chat_input("メッセージを入力...")
-    if not user_input:
+    # Chat input (text_area + button to avoid accidental Enter submission)
+    with st.form(key="chat_form", clear_on_submit=True):
+        user_input = st.text_area(
+            "メッセージ",
+            height=80,
+            placeholder="メッセージを入力... (Cmd+Enter で送信)",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("送信", type="primary", use_container_width=True)
+    if not submitted or not user_input.strip():
         return
+    user_input = user_input.strip()
 
     # Add user message
     st.session_state["chat_messages"].append({"role": "user", "content": user_input})
@@ -1259,6 +1267,7 @@ def _handle_analysis_in_chat(url, platform):
         )
 
     st.session_state["chat_analysis_running"] = False
+    st.rerun()
 
 
 def _handle_chat_response():
@@ -1281,6 +1290,7 @@ def _handle_chat_response():
     st.session_state["chat_messages"].append(
         {"role": "assistant", "content": response}
     )
+    st.rerun()
 
 
 # ==============================================================================

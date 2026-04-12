@@ -150,7 +150,7 @@ def fetch_account_data(url, platform):
             profile = fetch_tiktok_profile(username)
             if not profile:
                 return None, None, f"@{username} のプロフィールを取得できませんでした"
-            videos = fetch_tiktok_videos(username, max_videos=50)
+            videos = fetch_tiktok_videos(username, max_count=50)
             if not videos:
                 return profile, [], "動画が見つかりませんでした"
         elif platform == "instagram":
@@ -158,7 +158,7 @@ def fetch_account_data(url, platform):
             profile = fetch_instagram_profile(username)
             if not profile:
                 return None, None, f"@{username} のプロフィールを取得できませんでした"
-            videos = fetch_instagram_videos(username, max_videos=50)
+            videos = fetch_instagram_videos(username, max_count=50)
             if not videos:
                 return profile, [], "動画が見つかりませんでした"
         else:
