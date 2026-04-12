@@ -228,71 +228,148 @@ def fetch_account_data(url, platform):
         return None, None, f"メタデータ取得エラー: {str(e)[:200]}"
 
 
-def run_chat_analysis(profile, videos, platform, progress_callback=None):
-    """Run the full analysis pipeline for chat mode.
+def _select_videos_for_analysis(videos, max_count=10):
+    """Select videos for deep analysis with maximum contrast.
+
+    Strategy: pick from top, middle, and bottom performers
+    to give Claude the best picture of what works and what doesn't.
+
+    Args:
+        videos: List of video dicts, sorted by view_count desc.
+        max_count: Target number of videos.
+
+    Returns:
+        List of selected video dicts.
+    """
+    n = len(videos)
+    if n <= max_count:
+        return list(videos)
+
+    # Split into top/middle/bottom thirds
+    third = max(1, n // 3)
+    top = videos[:third]
+    mid = videos[third:third * 2]
+    bottom = videos[third * 2:]
+
+    # Allocate: 40% top, 20% middle, 40% bottom (maximize contrast)
+    n_top = max(1, int(max_count * 0.4))
+    n_mid = max(1, int(max_count * 0.2))
+    n_bottom = max_count - n_top - n_mid
+
+    import random
+    selected = []
+    selected.extend(top[:n_top] if len(top) >= n_top else top)
+    selected.extend(random.sample(mid, min(n_mid, len(mid))) if mid else [])
+    selected.extend(bottom[:n_bottom] if len(bottom) >= n_bottom else bottom)
+
+    return selected[:max_count]
+
+
+def _analyze_single_video(video, gemini_api_key, openai_api_key, use_gemini):
+    """Analyze a single video. Designed to run in a thread pool.
+
+    Returns:
+        Dict with video data + transcript + visual_analysis.
+    """
+    video_url = video.get("url", "")
+    transcript_data = {
+        "title": video.get("title", ""),
+        "url": video_url,
+        "view_count": video.get("view_count", 0),
+        "like_count": video.get("like_count", 0),
+        "comment_count": video.get("comment_count", 0),
+        "upload_date": video.get("upload_date", ""),
+    }
+
+    if not video_url:
+        transcript_data["transcript"] = "(URLなし)"
+        return transcript_data
+
+    if use_gemini:
+        from utils.gemini_video_analyzer import analyze_video_with_gemini
+        transcript, visual_analysis, err = analyze_video_with_gemini(
+            video_url, gemini_api_key
+        )
+        transcript_data["transcript"] = transcript or f"(文字起こし失敗: {err})"
+        if visual_analysis:
+            transcript_data["visual_analysis"] = visual_analysis
+    else:
+        transcript_text, err = transcribe_video_url(
+            video_url, openai_api_key, language="ja"
+        )
+        transcript_data["transcript"] = transcript_text or "(文字起こし失敗)"
+
+    return transcript_data
+
+
+def run_chat_analysis(profile, videos, platform, progress_callback=None,
+                      max_videos=10, max_workers=5):
+    """Run the full analysis pipeline for chat mode with parallel processing.
 
     Uses Gemini for video understanding (transcription + visual analysis),
     then Claude for deep analysis with the SKILL framework.
+    Videos are processed in parallel for speed.
 
     Args:
         profile: Account profile dict.
-        videos: List of video dicts.
+        videos: List of video dicts (sorted by view_count desc).
         platform: "tiktok" or "instagram".
         progress_callback: Optional callable(message) for progress updates.
+        max_videos: Number of videos for deep Gemini analysis (default 10).
+        max_workers: Number of parallel threads (default 5).
 
     Returns:
         Tuple of (account_data, transcripts, report, error).
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    use_gemini = bool(gemini_api_key)
 
-    # Sample videos for analysis
-    sampled = sample_videos_for_analysis(videos)
+    # Select videos for deep analysis
+    sampled = _select_videos_for_analysis(videos, max_count=max_videos)
     if not sampled:
         return None, None, None, "分析対象の動画がありません"
 
-    # Analyze videos with Gemini (preferred) or fall back to Whisper
-    transcripts = []
-    use_gemini = bool(gemini_api_key)
+    method = "Gemini" if use_gemini else "Whisper"
+    if progress_callback:
+        progress_callback(
+            f"{len(sampled)}本の動画を{method}で並列分析中（{max_workers}並列）..."
+        )
 
-    for i, video in enumerate(sampled):
-        video_url = video.get("url", "")
-        if not video_url:
-            continue
+    # Parallel video analysis
+    transcripts = [None] * len(sampled)
+    completed = 0
 
-        title_short = (video.get("title") or "無題")[:30]
-        if progress_callback:
-            method = "Gemini" if use_gemini else "Whisper"
-            progress_callback(
-                f"[{i+1}/{len(sampled)}] {title_short} — {method}で分析中..."
-            )
-
-        transcript_data = {
-            "title": video.get("title", ""),
-            "url": video_url,
-            "view_count": video.get("view_count", 0),
-            "like_count": video.get("like_count", 0),
-            "comment_count": video.get("comment_count", 0),
-            "upload_date": video.get("upload_date", ""),
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(
+                _analyze_single_video, video,
+                gemini_api_key, openai_api_key, use_gemini
+            ): i
+            for i, video in enumerate(sampled)
         }
 
-        if use_gemini:
-            from utils.gemini_video_analyzer import analyze_video_with_gemini
-            transcript, visual_analysis, err = analyze_video_with_gemini(
-                video_url, gemini_api_key
-            )
-            transcript_data["transcript"] = transcript or f"(文字起こし失敗: {err})"
-            if visual_analysis:
-                transcript_data["visual_analysis"] = visual_analysis
-        else:
-            transcript_text, err = transcribe_video_url(
-                video_url, openai_api_key, language="ja"
-            )
-            transcript_data["transcript"] = transcript_text or "(文字起こし失敗)"
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            completed += 1
+            try:
+                transcripts[idx] = future.result()
+            except Exception as e:
+                transcripts[idx] = {
+                    "title": sampled[idx].get("title", ""),
+                    "url": sampled[idx].get("url", ""),
+                    "view_count": sampled[idx].get("view_count", 0),
+                    "transcript": f"(分析失敗: {str(e)[:100]})",
+                }
+            if progress_callback:
+                progress_callback(f"動画分析: {completed}/{len(sampled)} 完了")
 
-        transcripts.append(transcript_data)
+    # Remove None entries (shouldn't happen but safety)
+    transcripts = [t for t in transcripts if t is not None]
 
-    # Build account data
+    # Build account data (uses ALL videos for stats, not just sampled)
     account_data = {
         "platform": platform,
         "name": profile.get("username") or profile.get("display_name", "不明"),
@@ -300,7 +377,7 @@ def run_chat_analysis(profile, videos, platform, progress_callback=None):
         "total_posts": len(videos),
     }
 
-    # Trend analysis
+    # Trend analysis on ALL videos (free, metadata only)
     trend_result = analyze_trends(videos)
     if trend_result:
         account_data["trend_analysis"] = format_trend_analysis(trend_result)
