@@ -1300,18 +1300,25 @@ def _handle_chat_response():
 st.title("📊 SNS Analyzer")
 st.caption("TikTok/Instagramアカウントを自動分析し、改善レポートを生成します")
 
-tab_chat, tab1, tab2, tab3 = st.tabs(
-    ["💬 チャット", "自動分析", "手動分析", "設定"]
-)
+is_admin = st.session_state.get("is_admin", False)
 
-with tab_chat:
+if is_admin:
+    # Admin: full access to all tabs
+    tab_chat, tab1, tab2, tab3 = st.tabs(
+        ["💬 チャット", "自動分析", "手動分析", "設定"]
+    )
+
+    with tab_chat:
+        render_chat_tab()
+
+    with tab1:
+        render_auto_analysis_tab()
+
+    with tab2:
+        render_manual_analysis_tab()
+
+    with tab3:
+        render_settings_tab()
+else:
+    # Guest: chat-only
     render_chat_tab()
-
-with tab1:
-    render_auto_analysis_tab()
-
-with tab2:
-    render_manual_analysis_tab()
-
-with tab3:
-    render_settings_tab()
