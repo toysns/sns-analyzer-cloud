@@ -48,6 +48,81 @@ CONTEXT_QUESTIONS = """アカウントのデータを取得しました！📥
 
 
 
+def detect_raw_data_request(text):
+    """Detect if user wants raw Gemini data only (transcripts + visual) without Claude analysis.
+
+    Returns:
+        True if user is requesting raw data only.
+    """
+    keywords = [
+        "文字起こしだけ", "文字起こしのみ",
+        "生データ", "生の情報", "そのままほしい",
+        "分析はいらない", "分析不要", "分析なし",
+        "transcriptのみ", "raw data",
+    ]
+    text_lower = text.lower().replace(" ", "").replace("　", "")
+    return any(kw.lower().replace(" ", "") in text_lower for kw in keywords)
+
+
+def format_raw_transcripts(transcripts):
+    """Format raw Gemini outputs as a clean Markdown report.
+
+    Args:
+        transcripts: List of dicts with transcript + visual_analysis + metadata.
+
+    Returns:
+        Markdown string.
+    """
+    if not transcripts:
+        return "(文字起こしデータがありません)"
+
+    parts = ["## 📝 文字起こし + 映像データ\n"]
+    parts.append(f"全 **{len(transcripts)}本** の動画を分析しました。\n")
+    parts.append("---\n")
+
+    # Sort by view count desc
+    sorted_t = sorted(
+        transcripts, key=lambda t: t.get("view_count", 0) or 0, reverse=True
+    )
+
+    for i, t in enumerate(sorted_t, 1):
+        title = (t.get("title") or "無題")[:80]
+        views = t.get("view_count", 0)
+        likes = t.get("like_count", 0)
+        comments = t.get("comment_count", 0)
+        url = t.get("url", "")
+        upload_date = t.get("upload_date", "")
+
+        parts.append(f"### {i}. {title}")
+        parts.append(
+            f"- 再生 {views:,} / いいね {likes:,} / コメント {comments:,}"
+            + (f" / 投稿日 {upload_date}" if upload_date else "")
+        )
+        if url:
+            parts.append(f"- URL: {url}")
+        parts.append("")
+
+        transcript = t.get("transcript", "")
+        if transcript:
+            parts.append("**🎙 文字起こし:**")
+            parts.append("```")
+            parts.append(transcript)
+            parts.append("```")
+            parts.append("")
+
+        visual = t.get("visual_analysis", "")
+        if visual:
+            parts.append("**👁 映像の事実描写:**")
+            parts.append("```")
+            parts.append(visual)
+            parts.append("```")
+            parts.append("")
+
+        parts.append("---\n")
+
+    return "\n".join(parts)
+
+
 def detect_url_in_message(text):
     """Detect TikTok or Instagram URL in user message.
 
@@ -237,12 +312,17 @@ def generate_hypothesis(profile, videos, platform):
 
 ### 確認したいこと
 [仮説の中で最も不確実な1点だけを質問。「このペルソナ合ってる？」「この目的で合ってる？」など、**1問だけ**]
+
+---
+
+💡 **文字起こし・映像データだけが欲しい場合**は「文字起こしだけほしい」とお返事ください。分析せずに生データをお渡しします。
 ```
 
 - 質問は**1つだけ**
 - ペルソナは具体的に1名で
 - 投稿サンプルの具体例を1-2個引用して根拠を見せる
-- 段階的に対話を進めることを意識（確認が終わったら次の質問に進む）"""
+- 段階的に対話を進めることを意識（確認が終わったら次の質問に進む）
+- 最後に「文字起こしだけほしい場合は〜」の案内文を必ず付ける"""
 
     try:
         client = Anthropic(api_key=api_key)
@@ -444,7 +524,8 @@ def _analyze_single_video(video, gemini_api_key, openai_api_key, use_gemini):
 
 
 def run_chat_analysis(profile, videos, platform, progress_callback=None,
-                      max_videos=50, max_workers=10, user_context=None):
+                      max_videos=50, max_workers=10, user_context=None,
+                      raw_only=False):
     """Run the full analysis pipeline for chat mode with parallel processing.
 
     Uses Gemini for video understanding (transcription + visual analysis),
@@ -524,6 +605,13 @@ def run_chat_analysis(profile, videos, platform, progress_callback=None,
     trend_result = analyze_trends(videos)
     if trend_result:
         account_data["trend_analysis"] = format_trend_analysis(trend_result)
+
+    # Raw-only mode: skip Claude, return formatted transcripts
+    if raw_only:
+        if progress_callback:
+            progress_callback("文字起こし + 映像データを整形中...")
+        report = format_raw_transcripts(transcripts)
+        return account_data, transcripts, report, None
 
     # Inject user-provided context (purpose/target/competitors/concerns)
     if user_context:

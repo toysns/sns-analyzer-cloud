@@ -49,6 +49,7 @@ from utils.knowledge import (
 from utils.chat import (
     WELCOME_MESSAGE,
     detect_url_in_message,
+    detect_raw_data_request,
     build_chat_system_prompt,
     stream_chat_response,
     fetch_account_data,
@@ -1188,19 +1189,76 @@ def render_chat_tab():
 
     # Check for URL in message
     url, platform = detect_url_in_message(user_input)
+    raw_only = detect_raw_data_request(user_input)
 
     # State-based routing:
     # - URL in message → fetch metadata & ask context questions (Phase 1)
+    #   (if raw_only: skip context, go straight to raw transcript dump)
     # - Awaiting context & no URL → user is answering context → run analysis (Phase 2)
     # - Otherwise → normal chat
     awaiting_context = st.session_state.get("chat_awaiting_context", False)
 
-    if url and not st.session_state.get("chat_analysis_running"):
+    if url and raw_only and not st.session_state.get("chat_analysis_running"):
+        _handle_raw_transcript_request(url, platform)
+    elif url and not st.session_state.get("chat_analysis_running"):
         _handle_url_detected(url, platform)
     elif awaiting_context and not st.session_state.get("chat_analysis_running"):
-        _handle_context_answer(user_input)
+        _handle_context_answer(user_input, raw_only=raw_only)
     else:
         _handle_chat_response()
+
+
+def _handle_raw_transcript_request(url, platform):
+    """Fetch + Gemini analysis only, no Claude report. Dumps raw transcripts."""
+    st.session_state["chat_analysis_running"] = True
+
+    with st.chat_message("assistant"):
+        with st.status("文字起こし+映像データ取得中...", expanded=True) as status:
+            st.write("メタデータを取得中...")
+            profile, videos, error = fetch_account_data(url, platform)
+
+            if error and not profile:
+                status.update(label="エラー", state="error")
+                msg = f"メタデータの取得に失敗しました: {error}"
+                st.error(msg)
+                st.session_state["chat_messages"].append(
+                    {"role": "assistant", "content": msg}
+                )
+                st.session_state["chat_analysis_running"] = False
+                return
+
+            st.write(f"✅ 動画を {len(videos)} 本取得しました")
+
+            account_data, transcripts, report, err = run_chat_analysis(
+                profile, videos, platform,
+                progress_callback=lambda msg: st.write(msg),
+                raw_only=True,
+            )
+
+            if err:
+                status.update(label="エラー", state="error")
+                st.error(f"取得失敗: {err}")
+                st.session_state["chat_messages"].append(
+                    {"role": "assistant", "content": f"取得失敗: {err}"}
+                )
+                st.session_state["chat_analysis_running"] = False
+                return
+
+            status.update(label="完了", state="complete")
+
+        st.markdown(report)
+
+        st.session_state["chat_context"] = {
+            "account_data": account_data,
+            "transcripts": transcripts,
+            "report": report,
+        }
+        st.session_state["chat_messages"].append(
+            {"role": "assistant", "content": report}
+        )
+
+    st.session_state["chat_analysis_running"] = False
+    st.rerun()
 
 
 def _handle_url_detected(url, platform):
@@ -1257,7 +1315,7 @@ def _handle_url_detected(url, platform):
     st.rerun()
 
 
-def _handle_context_answer(user_input):
+def _handle_context_answer(user_input, raw_only=False):
     """Phase 2: User answered context questions, run the analysis."""
     pending = st.session_state.get("chat_pending_analysis")
     if not pending:
@@ -1267,15 +1325,17 @@ def _handle_context_answer(user_input):
 
     st.session_state["chat_analysis_running"] = True
 
+    label = "文字起こし+映像データ取得中..." if raw_only else "分析実行中（数分かかります）..."
     with st.chat_message("assistant"):
-        with st.status("分析実行中（数分かかります）...", expanded=True) as status:
+        with st.status(label, expanded=True) as status:
             st.write("動画を並列で分析中...")
             account_data, transcripts, report, error = run_chat_analysis(
                 pending["profile"],
                 pending["videos"],
                 pending["platform"],
                 progress_callback=lambda msg: st.write(msg),
-                user_context=user_input,
+                user_context=user_input if not raw_only else None,
+                raw_only=raw_only,
             )
 
             if error:
