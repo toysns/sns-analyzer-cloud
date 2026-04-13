@@ -9,6 +9,8 @@ DEFAULTS = {
     "chat_messages": [],
     "chat_context": {},
     "chat_analysis_running": False,
+    "chat_awaiting_context": False,
+    "chat_pending_analysis": None,
     # Common
     "platform": "",
     "account_name": "",

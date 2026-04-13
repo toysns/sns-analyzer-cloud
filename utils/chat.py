@@ -27,6 +27,26 @@ WELCOME_MESSAGE = (
     "URLがなくても、SNSに関する質問があればお気軽にどうぞ！"
 )
 
+CONTEXT_QUESTIONS = """アカウントのデータを取得しました！📥
+
+質の高い分析をするため、いくつか教えてください:
+
+**1. このアカウントの運用目的は？**
+（例: 集客、採用、ブランディング、商品販売、など）
+
+**2. 誰に届けたいですか？（ターゲット）**
+（例: 30代女性で子育てに悩む人、SNS運用を始めたいオーナー、など）
+できるだけ具体的に。年齢・職業・悩み・ライフスタイルなど
+
+**3. 競合で意識しているアカウントはありますか？**
+（URLか名前を教えてください。複数OK。なければ「なし」でも大丈夫）
+
+**4. 特に聞きたいこと・悩みは？**
+（例: 伸び悩んでる、リーチは出るがフォロワーにならない、台本が思いつかない、など）
+
+まとめて1メッセージで答えてくれたら、分析を始めます！"""
+
+
 
 def detect_url_in_message(text):
     """Detect TikTok or Instagram URL in user message.
@@ -303,7 +323,7 @@ def _analyze_single_video(video, gemini_api_key, openai_api_key, use_gemini):
 
 
 def run_chat_analysis(profile, videos, platform, progress_callback=None,
-                      max_videos=50, max_workers=10):
+                      max_videos=50, max_workers=10, user_context=None):
     """Run the full analysis pipeline for chat mode with parallel processing.
 
     Uses Gemini for video understanding (transcription + visual analysis),
@@ -317,6 +337,8 @@ def run_chat_analysis(profile, videos, platform, progress_callback=None,
         progress_callback: Optional callable(message) for progress updates.
         max_videos: Number of videos for deep Gemini analysis (default 10).
         max_workers: Number of parallel threads (default 5).
+        user_context: Optional string with user-provided context
+            (purpose, target, competitors, concerns).
 
     Returns:
         Tuple of (account_data, transcripts, report, error).
@@ -381,6 +403,10 @@ def run_chat_analysis(profile, videos, platform, progress_callback=None,
     trend_result = analyze_trends(videos)
     if trend_result:
         account_data["trend_analysis"] = format_trend_analysis(trend_result)
+
+    # Inject user-provided context (purpose/target/competitors/concerns)
+    if user_context:
+        account_data["supplement"] = user_context
 
     if progress_callback:
         progress_callback("Claude で分析レポートを生成中...")

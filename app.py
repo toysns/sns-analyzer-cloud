@@ -1188,19 +1188,28 @@ def render_chat_tab():
     # Check for URL in message
     url, platform = detect_url_in_message(user_input)
 
+    # State-based routing:
+    # - URL in message → fetch metadata & ask context questions (Phase 1)
+    # - Awaiting context & no URL → user is answering context → run analysis (Phase 2)
+    # - Otherwise → normal chat
+    awaiting_context = st.session_state.get("chat_awaiting_context", False)
+
     if url and not st.session_state.get("chat_analysis_running"):
-        _handle_analysis_in_chat(url, platform)
+        _handle_url_detected(url, platform)
+    elif awaiting_context and not st.session_state.get("chat_analysis_running"):
+        _handle_context_answer(user_input)
     else:
         _handle_chat_response()
 
 
-def _handle_analysis_in_chat(url, platform):
-    """Handle account analysis triggered by URL detection in chat."""
+def _handle_url_detected(url, platform):
+    """Phase 1: Fetch metadata and ask for context."""
+    from utils.chat import CONTEXT_QUESTIONS
+
     st.session_state["chat_analysis_running"] = True
 
     with st.chat_message("assistant"):
-        with st.status("分析を実行中...", expanded=True) as status:
-            # Step 1: Fetch metadata
+        with st.status("アカウントデータを取得中...", expanded=True) as status:
             st.write("メタデータを取得中...")
             profile, videos, error = fetch_account_data(url, platform)
 
@@ -1216,11 +1225,11 @@ def _handle_analysis_in_chat(url, platform):
 
             username = profile.get("username") or profile.get("display_name", "不明")
             video_count = len(videos) if videos else 0
-            st.write(f"@{username} の動画を {video_count} 本取得しました")
+            st.write(f"✅ @{username} の動画を {video_count} 本取得しました")
 
             if video_count == 0:
                 status.update(label="完了", state="complete")
-                msg = f"@{username} のプロフィールは取得できましたが、動画が見つかりませんでした。手動分析タブからURLを個別に入力して分析できます。"
+                msg = f"@{username} のプロフィールは取得できましたが、動画が見つかりませんでした。"
                 st.markdown(msg)
                 st.session_state["chat_messages"].append(
                     {"role": "assistant", "content": msg}
@@ -1228,10 +1237,44 @@ def _handle_analysis_in_chat(url, platform):
                 st.session_state["chat_analysis_running"] = False
                 return
 
-            # Step 2: Transcribe & Analyze
-            st.write("文字起こし & 分析中（数分かかります）...")
+            status.update(label="取得完了", state="complete")
+
+        # Ask context questions
+        st.markdown(CONTEXT_QUESTIONS)
+
+    # Save pending analysis state
+    st.session_state["chat_pending_analysis"] = {
+        "profile": profile,
+        "videos": videos,
+        "platform": platform,
+    }
+    st.session_state["chat_awaiting_context"] = True
+    st.session_state["chat_messages"].append(
+        {"role": "assistant", "content": CONTEXT_QUESTIONS}
+    )
+    st.session_state["chat_analysis_running"] = False
+    st.rerun()
+
+
+def _handle_context_answer(user_input):
+    """Phase 2: User answered context questions, run the analysis."""
+    pending = st.session_state.get("chat_pending_analysis")
+    if not pending:
+        st.session_state["chat_awaiting_context"] = False
+        _handle_chat_response()
+        return
+
+    st.session_state["chat_analysis_running"] = True
+
+    with st.chat_message("assistant"):
+        with st.status("分析実行中（数分かかります）...", expanded=True) as status:
+            st.write("動画を並列で分析中...")
             account_data, transcripts, report, error = run_chat_analysis(
-                profile, videos, platform
+                pending["profile"],
+                pending["videos"],
+                pending["platform"],
+                progress_callback=lambda msg: st.write(msg),
+                user_context=user_input,
             )
 
             if error:
@@ -1242,31 +1285,33 @@ def _handle_analysis_in_chat(url, platform):
                     {"role": "assistant", "content": msg}
                 )
                 st.session_state["chat_analysis_running"] = False
+                st.session_state["chat_awaiting_context"] = False
                 return
 
             status.update(label="分析完了!", state="complete")
 
-        # Display report
         st.markdown(report)
 
-        # Save context for follow-up questions
         st.session_state["chat_context"] = {
             "account_data": account_data,
             "transcripts": transcripts,
             "report": report,
+            "user_context": user_input,
         }
         st.session_state["chat_messages"].append(
             {"role": "assistant", "content": report}
         )
 
-        # Follow-up prompt
-        followup = "\n\n---\n何か気になる点や、さらに深掘りしたいポイントはありますか？"
+        followup = "\n\n---\n追加で質問や深掘りしたい点はありますか？"
         st.markdown(followup)
         st.session_state["chat_messages"].append(
             {"role": "assistant", "content": followup}
         )
 
+    # Clear analysis state
     st.session_state["chat_analysis_running"] = False
+    st.session_state["chat_awaiting_context"] = False
+    st.session_state["chat_pending_analysis"] = None
     st.rerun()
 
 
