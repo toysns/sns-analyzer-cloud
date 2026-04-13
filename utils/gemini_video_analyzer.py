@@ -102,6 +102,36 @@ def _download_video(url, output_path):
         return False, "yt-dlpがインストールされていません"
 
 
+def _download_video_direct(url, output_path):
+    """Download video directly via urllib (for Instagram CDN URLs from Apify).
+
+    Bypasses yt-dlp which hits Instagram rate limits.
+
+    Returns:
+        Tuple of (success: bool, error_message: str).
+    """
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            },
+        )
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            with open(output_path, "wb") as f:
+                while True:
+                    chunk = resp.read(1024 * 64)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+            return False, "動画ファイルが空または取得できませんでした"
+        return True, ""
+    except Exception as e:
+        return False, f"直接ダウンロード失敗: {str(e)[:200]}"
+
+
 def _parse_gemini_response(text):
     """Parse Gemini response into transcript and visual analysis sections.
 
@@ -158,7 +188,7 @@ def _wait_for_file_active(client, file_ref, timeout=120):
     return None, f"動画処理がタイムアウトしました（{timeout}秒）"
 
 
-def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None):
+def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None, direct_video_url=None):
     """Full Gemini video analysis pipeline: download → upload → unified analysis.
 
     Uses Gemini's native video understanding to perform transcription and
@@ -166,9 +196,11 @@ def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None):
     GPT-4o Vision pipeline.
 
     Args:
-        url: Video URL (TikTok, Instagram, etc.).
+        url: Original post URL (TikTok, Instagram, etc.). Used for identification.
         gemini_api_key: Google AI Studio API key.
         temp_dir: Temp directory. Defaults to system temp.
+        direct_video_url: Optional direct mp4 URL (e.g. from Apify) to bypass yt-dlp.
+            Used for Instagram which yt-dlp cannot reliably access.
 
     Returns:
         Tuple of (transcript: str | None, visual_analysis: str | None, error: str | None).
@@ -184,8 +216,14 @@ def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None):
     client = None
 
     try:
-        # Step 1: Download video
-        success, error = _download_video(url, video_path)
+        # Step 1: Download video (prefer direct URL if given, fall back to yt-dlp)
+        if direct_video_url:
+            success, error = _download_video_direct(direct_video_url, video_path)
+            if not success:
+                # Fall back to yt-dlp if direct download fails
+                success, error = _download_video(url, video_path)
+        else:
+            success, error = _download_video(url, video_path)
         if not success:
             return None, None, error
 

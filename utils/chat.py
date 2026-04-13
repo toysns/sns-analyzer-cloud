@@ -358,6 +358,7 @@ def _fetch_instagram_via_apify(username, max_count=50):
         "username": [username],
         "resultsLimit": max_count,
     }).encode()
+    # Note: videoUrl is returned by default in the Reel metadata without add-ons
 
     req = urllib.request.Request(
         f"{api_url}?token={apify_token}",
@@ -405,10 +406,15 @@ def _fetch_instagram_via_apify(username, max_count=50):
         videos.append({
             "title": (item.get("caption") or "")[:100],
             "url": item.get("url", ""),
-            "view_count": item.get("viewCount") or item.get("playCount") or 0,
+            "view_count": (item.get("videoPlayCount")
+                           or item.get("videoViewCount")
+                           or item.get("viewCount")
+                           or item.get("playCount") or 0),
             "like_count": item.get("likesCount", 0),
             "comment_count": item.get("commentsCount", 0),
             "upload_date": (item.get("timestamp") or "")[:10],
+            # Direct video CDN URL from Apify (bypasses yt-dlp Instagram rate-limit)
+            "direct_video_url": item.get("videoUrl", ""),
         })
 
     return profile, videos, None
@@ -508,8 +514,10 @@ def _analyze_single_video(video, gemini_api_key, openai_api_key, use_gemini):
 
     if use_gemini:
         from utils.gemini_video_analyzer import analyze_video_with_gemini
+        # Use direct video URL if available (from Apify for Instagram)
+        direct_url = video.get("direct_video_url") or None
         transcript, visual_analysis, err = analyze_video_with_gemini(
-            video_url, gemini_api_key
+            video_url, gemini_api_key, direct_video_url=direct_url,
         )
         transcript_data["transcript"] = transcript or f"(文字起こし失敗: {err})"
         if visual_analysis:
