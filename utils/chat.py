@@ -532,7 +532,7 @@ def _analyze_single_video(video, gemini_api_key, openai_api_key, use_gemini):
 
 
 def run_chat_analysis(profile, videos, platform, progress_callback=None,
-                      max_videos=50, max_workers=10, user_context=None,
+                      max_videos=50, max_workers=3, user_context=None,
                       raw_only=False):
     """Run the full analysis pipeline for chat mode with parallel processing.
 

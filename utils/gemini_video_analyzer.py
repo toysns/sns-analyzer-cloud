@@ -242,21 +242,33 @@ def analyze_video_with_gemini(url, gemini_api_key, temp_dir=None, direct_video_u
         if error:
             return None, None, error
 
-        # Step 4: Analyze with Gemini
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[GEMINI_VIDEO_PROMPT, file_ref],
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=8000,
-                ),
-            )
-        except Exception as e:
-            error_msg = str(e)
-            if "api key" in error_msg.lower() or "api_key" in error_msg.lower():
-                return None, None, "Gemini APIキーが無効です"
-            return None, None, f"Gemini分析エラー: {error_msg[:300]}"
+        # Step 4: Analyze with Gemini (with retry on 429 rate limit)
+        response = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[GEMINI_VIDEO_PROMPT, file_ref],
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        max_output_tokens=8000,
+                    ),
+                )
+                break
+            except Exception as e:
+                error_msg = str(e)
+                if "api key" in error_msg.lower() or "api_key" in error_msg.lower():
+                    return None, None, "Gemini APIキーが無効です"
+                if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                    if attempt < 2:
+                        # Exponential backoff: 10s, 25s
+                        time.sleep(10 + attempt * 15)
+                        continue
+                    return None, None, (
+                        "Gemini APIレート制限に達しました。"
+                        "少し時間をおいて再試行してください（無料枠: 15 RPM / 1500 RPD）"
+                    )
+                return None, None, f"Gemini分析エラー: {error_msg[:300]}"
 
         if not response.text:
             return None, None, "Geminiからの応答が空です"
