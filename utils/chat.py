@@ -154,6 +154,99 @@ def stream_chat_response(messages, system_prompt):
             yield f"エラーが発生しました: {error_msg[:200]}"
 
 
+def generate_hypothesis(profile, videos, platform):
+    """Use Claude to form a hypothesis about the account from metadata/captions.
+
+    Returns dynamic hypothesis + contextualized questions based on actual content.
+
+    Returns:
+        String with hypothesis + questions, or fallback static questions on error.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return CONTEXT_QUESTIONS
+
+    # Build compact metadata summary for Claude (top 10 + bottom 5 by views)
+    sorted_videos = sorted(
+        videos, key=lambda v: v.get("view_count", 0) or 0, reverse=True
+    )
+    sample = sorted_videos[:10] + sorted_videos[-5:] if len(sorted_videos) > 15 else sorted_videos
+
+    video_summary = []
+    for i, v in enumerate(sample, 1):
+        title = (v.get("title") or "")[:150]
+        views = v.get("view_count", 0)
+        likes = v.get("like_count", 0)
+        comments = v.get("comment_count", 0)
+        video_summary.append(
+            f"{i}. [再生 {views:,} / いいね {likes:,} / コメント {comments:,}] {title}"
+        )
+
+    username = profile.get("username") or profile.get("display_name", "不明")
+    display_name = profile.get("display_name", "")
+
+    prompt = f"""あなたはSNSアカウント分析の専門家です。以下のアカウント情報から、**仮説**を立てて、ユーザーに確認の質問を投げてください。
+
+## アカウント情報
+- プラットフォーム: {platform}
+- アカウント名: @{username} ({display_name})
+- 取得した投稿数: {len(videos)}本
+
+## 投稿サンプル（上位+下位の計{len(sample)}本、再生数順）
+{chr(10).join(video_summary)}
+
+---
+
+## あなたのタスク
+
+キャプションの内容・再生数の偏り・コメント/いいね比率・投稿パターンから、以下を**仮説として推測**してください:
+
+1. **このアカウントは何をしているか**（提供価値・テーマ）
+2. **誰に向けた投稿か**（推定ターゲット層）
+3. **運用目的の推測**（集客/販売/ブランディング/コンテンツ収益化 など）
+4. **伸びている投稿と伸びていない投稿の傾向**（パターンの仮説）
+
+そして、その仮説を**短く提示した上で、ユーザーに確認の質問**を投げてください。
+
+## 出力フォーマット
+
+```
+アカウントを見てみました！以下の仮説を立ててみたので、合ってるか教えてください🔍
+
+### 私の仮説
+- **やっていること**: [推測]
+- **ターゲット**: [推測]
+- **運用目的**: [推測]
+- **パフォーマンスの傾向**: [上位と下位の違いの仮説]
+
+### 確認したいこと
+1. この仮説、合ってますか？違う部分があれば教えてください
+2. [仮説に基づいた具体的な質問1]
+3. [仮説に基づいた具体的な質問2]
+4. 競合で意識しているアカウントはありますか？
+5. 今一番困っていること・伸ばしたい指標は何ですか？
+
+答えてもらえたら、詳細な分析に入ります！
+```
+
+- 仮説は具体的に。「おそらく〇〇系」ではなく「20代後半〜30代前半の女性で、副業に興味がある層」のように
+- 質問は仮説を踏まえた具体的なもの。一般的な「ターゲットは？」ではなく「〇〇な人を狙ってると思うけど合ってる？」
+- 投稿サンプルの具体例を1-2個引用して根拠を見せる"""
+
+    try:
+        client = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+        )
+        return response.content[0].text
+    except Exception as e:
+        logger.warning("Hypothesis generation failed: %s", e)
+        return CONTEXT_QUESTIONS
+
+
 def _fetch_instagram_via_apify(username, max_count=50):
     """Fetch Instagram Reels via Apify Instagram Reel Scraper.
 

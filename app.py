@@ -53,6 +53,7 @@ from utils.chat import (
     stream_chat_response,
     fetch_account_data,
     run_chat_analysis,
+    generate_hypothesis,
 )
 
 # --- Page Config ---
@@ -1203,13 +1204,11 @@ def render_chat_tab():
 
 
 def _handle_url_detected(url, platform):
-    """Phase 1: Fetch metadata and ask for context."""
-    from utils.chat import CONTEXT_QUESTIONS
-
+    """Phase 1: Fetch metadata, form hypothesis, ask for context."""
     st.session_state["chat_analysis_running"] = True
 
     with st.chat_message("assistant"):
-        with st.status("アカウントデータを取得中...", expanded=True) as status:
+        with st.status("アカウントを読み込み中...", expanded=True) as status:
             st.write("メタデータを取得中...")
             profile, videos, error = fetch_account_data(url, platform)
 
@@ -1237,10 +1236,12 @@ def _handle_url_detected(url, platform):
                 st.session_state["chat_analysis_running"] = False
                 return
 
-            status.update(label="取得完了", state="complete")
+            st.write("投稿内容を読み込んで仮説を立てています...")
+            hypothesis = generate_hypothesis(profile, videos, platform)
+            status.update(label="仮説生成完了", state="complete")
 
-        # Ask context questions
-        st.markdown(CONTEXT_QUESTIONS)
+        # Show hypothesis + questions
+        st.markdown(hypothesis)
 
     # Save pending analysis state
     st.session_state["chat_pending_analysis"] = {
@@ -1250,7 +1251,7 @@ def _handle_url_detected(url, platform):
     }
     st.session_state["chat_awaiting_context"] = True
     st.session_state["chat_messages"].append(
-        {"role": "assistant", "content": CONTEXT_QUESTIONS}
+        {"role": "assistant", "content": hypothesis}
     )
     st.session_state["chat_analysis_running"] = False
     st.rerun()
