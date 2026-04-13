@@ -286,11 +286,28 @@ def _fetch_instagram_via_apify(username, max_count=50):
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            items = json.loads(resp.read().decode())
-    except Exception as e:
-        return None, None, f"Apify API エラー: {str(e)[:200]}"
+    # Retry up to 3 times for transient 5xx errors
+    import time as _time
+    last_err = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                items = json.loads(resp.read().decode())
+            break
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code >= 500 and attempt < 2:
+                _time.sleep(3 * (attempt + 1))
+                continue
+            return None, None, f"Apify API エラー: HTTP {e.code} — 時間をおいて再試行してください"
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                _time.sleep(3 * (attempt + 1))
+                continue
+            return None, None, f"Apify API エラー: {str(e)[:200]}"
+    else:
+        return None, None, f"Apify API エラー: {str(last_err)[:200]}"
 
     if not items:
         return None, None, f"@{username} の Reel が見つかりませんでした"
