@@ -2,10 +2,10 @@
 
 import functools
 import logging
-import os
 from pathlib import Path
 
 from anthropic import Anthropic
+from utils.config import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -220,13 +220,13 @@ def run_analysis(account_data, transcripts, mode, openai_api_key):
         account_data: Dict with account info.
         transcripts: List of dicts with video data and transcripts.
         mode: Analysis mode number (1-5).
-        openai_api_key: OpenAI API key (kept for Whisper; Anthropic key from env).
+        openai_api_key: OpenAI API key (kept for Whisper; Anthropic key from config).
 
     Returns:
         Tuple of (report: str | None, error: str | None).
     """
     try:
-        anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
             return None, "ANTHROPIC_API_KEY が設定されていません"
 

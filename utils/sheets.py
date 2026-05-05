@@ -2,10 +2,10 @@
 
 import json
 import logging
-import os
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from utils.config import get_google_credentials, get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +24,17 @@ def get_sheets_client(creds_source=None):
 
     Args:
         creds_source: Either a dict of credentials, a JSON string, or None.
-            If None, reads from GOOGLE_CREDENTIALS env var.
+            If None, reads from GOOGLE_CREDENTIALS or [google_credentials].
 
     Returns:
         gspread.Client or None if authentication fails.
     """
     try:
         if creds_source is None:
-            creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
-            if not creds_raw:
-                logger.error("GOOGLE_CREDENTIALS environment variable not set")
+            creds_dict = get_google_credentials()
+            if not creds_dict:
+                logger.error("GOOGLE_CREDENTIALS or [google_credentials] not set")
                 return None
-            creds_dict = json.loads(creds_raw)
         elif isinstance(creds_source, str):
             creds_dict = json.loads(creds_source)
         else:
@@ -65,7 +64,7 @@ def save_videos_to_sheet(client, sheet_name, data, spreadsheet_name=None):
         Tuple of (success: bool, message: str).
     """
     if spreadsheet_name is None:
-        spreadsheet_name = os.environ.get("SPREADSHEET_NAME", DEFAULT_SPREADSHEET)
+        spreadsheet_name = get_secret("SPREADSHEET_NAME", default=DEFAULT_SPREADSHEET)
 
     try:
         spreadsheet = client.open(spreadsheet_name)

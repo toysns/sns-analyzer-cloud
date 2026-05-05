@@ -1,11 +1,11 @@
 """SNS Analyzer - TikTok/Instagram account analysis tool."""
 
 import json
-import os
 import re
 
 import streamlit as st
 
+from utils.config import get_google_credentials, get_secret
 from utils.session import init_session_state, clear_analysis_state
 from utils.tiktok_fetcher import (
     extract_username as extract_tiktok_username,
@@ -56,19 +56,9 @@ st.set_page_config(
 init_session_state()
 
 # --- API Key Check ---
-def _get_secret(key, default=""):
-    """Get secret from environment or st.secrets."""
-    val = os.environ.get(key, "")
-    if val:
-        return val
-    try:
-        return st.secrets.get(key, default)
-    except Exception:
-        return default
-
-OPENAI_API_KEY = _get_secret("OPENAI_API_KEY")
-GEMINI_API_KEY = _get_secret("GEMINI_API_KEY")
-APIFY_API_TOKEN = _get_secret("APIFY_API_TOKEN")
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
+GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
+APIFY_API_TOKEN = get_secret("APIFY_API_TOKEN", "APIFY_TOKEN")
 
 
 def _detect_platform(url):
@@ -168,7 +158,7 @@ def render_auto_analysis_tab():
                 st.success("Apify: 接続可能 — Instagramデータを自動収集します")
             else:
                 st.warning(
-                    "APIFY_API_TOKEN未設定 — yt-dlpフォールバックで取得を試みます。\n"
+                    "APIFY_API_TOKEN / APIFY_TOKEN未設定 — yt-dlpフォールバックで取得を試みます。\n"
                     "Apifyを設定するとInstagramデータをより確実に収集できます。"
                 )
 
@@ -756,12 +746,12 @@ def _show_analysis_results(username, mode):
 
 def _save_to_sheets(transcripts, account_name, platform_prefix):
     """Save transcription data to Google Sheets."""
-    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
-    if not creds_raw:
+    creds = get_google_credentials()
+    if not creds:
         st.write("  ⚠ GOOGLE_CREDENTIALS が設定されていません。スプレッドシート保存をスキップ。")
         return
 
-    client = get_sheets_client(creds_raw)
+    client = get_sheets_client(creds)
     if not client:
         st.write("  ⚠ Google Sheets認証に失敗しました。スキップ。")
         return
@@ -992,33 +982,33 @@ def render_settings_tab():
 
     # API Key status
     st.subheader("APIキー状態")
-    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    ANTHROPIC_API_KEY = get_secret("ANTHROPIC_API_KEY")
     if ANTHROPIC_API_KEY:
         st.success(f"Anthropic API Key: 設定済み (****{ANTHROPIC_API_KEY[-4:]})")
     else:
-        st.error("Anthropic API Key: 未設定 (環境変数 ANTHROPIC_API_KEY を設定してください)")
+        st.error("Anthropic API Key: 未設定 (Streamlit Secrets または環境変数 ANTHROPIC_API_KEY を設定してください)")
     if OPENAI_API_KEY:
         st.success(f"OpenAI API Key: 設定済み (****{OPENAI_API_KEY[-4:]}) — 文字起こし(Whisper)/映像分析(GPT-4o)用")
     else:
-        st.error("OpenAI API Key: 未設定 (環境変数 OPENAI_API_KEY を設定してください)")
+        st.error("OpenAI API Key: 未設定 (Streamlit Secrets または環境変数 OPENAI_API_KEY を設定してください)")
     if GEMINI_API_KEY:
         st.success(f"Gemini API Key: 設定済み (****{GEMINI_API_KEY[-4:]}) — Gemini動画分析用")
     else:
-        st.warning("Gemini API Key: 未設定 (環境変数 GEMINI_API_KEY を設定するとGemini動画分析が使えます)")
+        st.warning("Gemini API Key: 未設定 (Streamlit Secrets または環境変数 GEMINI_API_KEY を設定するとGemini動画分析が使えます)")
     if APIFY_API_TOKEN:
         st.success(f"Apify API Token: 設定済み (****{APIFY_API_TOKEN[-4:]}) — Instagram自動収集用")
     else:
-        st.warning("Apify API Token: 未設定 (環境変数 APIFY_API_TOKEN を設定するとInstagramの自動データ収集が使えます)")
+        st.warning("Apify API Token: 未設定 (Streamlit Secrets または環境変数 APIFY_API_TOKEN / APIFY_TOKEN を設定するとInstagramの自動データ収集が使えます)")
 
     # Google Sheets test
     st.subheader("Google Sheets接続")
-    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
-    if creds_raw:
+    creds = get_google_credentials()
+    if creds:
         st.success("GOOGLE_CREDENTIALS: 設定済み")
         if st.button("接続テスト", key="test_sheets"):
-            client = get_sheets_client(creds_raw)
+            client = get_sheets_client(creds)
             if client:
-                spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "TikTok分析データベース")
+                spreadsheet_name = get_secret("SPREADSHEET_NAME", default="TikTok分析データベース")
                 try:
                     spreadsheet = client.open(spreadsheet_name)
                     st.success(f"スプレッドシート '{spreadsheet_name}' に接続成功! (URL: {spreadsheet.url})")

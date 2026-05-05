@@ -8,11 +8,11 @@ Actor: apify/instagram-reel-scraper
 """
 
 import logging
-import os
 import re
 from datetime import datetime
 
 import requests
+from utils.config import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +24,8 @@ SYNC_TIMEOUT = 290
 
 
 def get_apify_api_token():
-    """Get Apify API token from environment or st.secrets."""
-    val = os.environ.get("APIFY_API_TOKEN", "")
-    if val:
-        return val
-    try:
-        import streamlit as st
-        return st.secrets.get("APIFY_API_TOKEN", "")
-    except Exception:
-        return ""
+    """Get Apify API token from environment or Streamlit Cloud secrets."""
+    return get_secret("APIFY_API_TOKEN", "APIFY_TOKEN")
 
 
 def collect_instagram_data(username, api_token=None, max_videos=30,
@@ -53,7 +46,7 @@ def collect_instagram_data(username, api_token=None, max_videos=30,
     """
     api_token = api_token or get_apify_api_token()
     if not api_token:
-        return None, None, "APIFY_API_TOKEN未設定"
+        return None, None, "APIFY_API_TOKEN / APIFY_TOKEN未設定"
 
     if progress_callback:
         progress_callback("Apifyでデータ収集中...")

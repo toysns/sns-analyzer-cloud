@@ -252,7 +252,7 @@ def fetch_instagram_via_apify(username, max_count=30, progress_callback=None):
     """
     api_token = get_apify_api_token()
     if not api_token:
-        return None, None, "APIFY_API_TOKEN未設定"
+        return None, None, "APIFY_API_TOKEN / APIFY_TOKEN未設定"
 
     profile, videos, error = collect_instagram_data(
         username,
@@ -304,7 +304,7 @@ def fetch_instagram_auto(username, max_count=30, progress_callback=None):
             progress_callback(f"Apify失敗 ({error})、yt-dlpにフォールバック中...")
     else:
         if progress_callback:
-            progress_callback("APIFY_API_TOKEN未設定のため、yt-dlpで取得中...")
+            progress_callback("APIFY_API_TOKEN / APIFY_TOKEN未設定のため、yt-dlpで取得中...")
 
     # Fallback to yt-dlp
     if progress_callback:
